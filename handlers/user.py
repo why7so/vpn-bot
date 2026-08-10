@@ -2,12 +2,10 @@ import datetime as dt
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandObject, CommandStart, StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from config import PLANS, TOPUP_PRESETS_RUB, config
+from config import PLANS, config
 from database.db import (
     PromoError,
     adjust_balance,
@@ -25,7 +23,6 @@ from database.db import (
     upsert_subscription,
 )
 from keyboards.keyboards import (
-    balance_kb,
     back_main_kb,
     invoice_kb,
     main_menu_kb,
@@ -38,14 +35,6 @@ from services.threexui_api import ThreeXUIError, threexui_client
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
-
-
-class TopUp(StatesGroup):
-    waiting_amount = State()
-
-
-class Promo(StatesGroup):
-    waiting_code = State()
 
 
 def _profile_text(user, sub) -> str:
@@ -131,22 +120,6 @@ async def show_plans(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "about")
-async def about(callback: CallbackQuery) -> None:
-    text = (
-        f"ℹ️ <b>{config.vpn_name}</b>\n\n"
-        "Бот выдаёт доступ к VPN. Whitelist разрешённых доменов/IP "
-        "настраивается на стороне сервера.\n\n"
-        + (
-            f"По всем вопросам пишите: @{config.support_username}"
-            if config.support_username
-            else "Поддержка временно недоступна."
-        )
-    )
-    await callback.message.edit_text(text, reply_markup=back_main_kb())
-    await callback.answer()
-
-
 @router.callback_query(F.data == "connect_device")
 async def connect_device(callback: CallbackQuery) -> None:
     async with async_session() as session:
@@ -166,110 +139,6 @@ async def connect_device(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(text, reply_markup=back_main_kb())
     await callback.answer()
-
-
-@router.callback_query(F.data == "devices")
-async def devices(callback: CallbackQuery) -> None:
-    text = (
-        "💻 <b>Устройства</b>\n\n"
-        "Ограничения на количество устройств нет — используйте одну и ту же "
-        "ссылку-подписку на всех своих устройствах одновременно."
-    )
-    await callback.message.edit_text(text, reply_markup=back_main_kb())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "share_sub")
-async def share_sub(callback: CallbackQuery) -> None:
-    async with async_session() as session:
-        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
-
-    if sub is None or not sub.subscription_url:
-        text = "У вас пока нет активной подписки, поделиться нечем."
-    else:
-        text = (
-            "🐸 <b>Поделиться подпиской</b>\n\n"
-            "Перешлите это сообщение или скопируйте ссылку:\n"
-            f"<code>{sub.subscription_url}</code>"
-        )
-
-    await callback.message.edit_text(text, reply_markup=back_main_kb())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "balance")
-async def balance_screen(callback: CallbackQuery) -> None:
-    async with async_session() as session:
-        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username)
-
-    text = f"💰 <b>Баланс:</b> {user.balance:.0f} ₽\n\nВыберите сумму пополнения (LAVA — карта/СБП):"
-    await callback.message.edit_text(text, reply_markup=balance_kb())
-    await callback.answer()
-
-
-async def _start_topup(callback_or_message, tg_id: int, username: str | None, amount: float, edit: bool) -> None:
-    async with async_session() as session:
-        user = await get_or_create_user(session, tg_id, username)
-
-        invoice = await lava_client.create_invoice(
-            amount_rub=amount,
-            comment=f"{config.vpn_name}: пополнение баланса",
-            order_id=f"topup-user{user.tg_id}-{int(dt.datetime.utcnow().timestamp())}",
-        )
-        await create_invoice(
-            session,
-            user_id=user.id,
-            invoice_id=str(invoice["invoice_id"]),
-            pay_url=invoice["pay_url"],
-            amount=amount,
-            purpose="topup",
-            provider="lava",
-            currency="RUB",
-        )
-
-    text = (
-        f"Пополнение баланса на {amount:.0f} ₽\n\n"
-        "Нажмите «Оплатить», после оплаты вернитесь и нажмите «Я оплатил»."
-    )
-    kb = invoice_kb(invoice["pay_url"], str(invoice["invoice_id"]), provider="lava", back_callback="balance")
-
-    if edit:
-        await callback_or_message.message.edit_text(text, reply_markup=kb)
-    else:
-        await callback_or_message.answer(text, reply_markup=kb)
-
-
-@router.callback_query(F.data.startswith("topup:"))
-async def topup_preset(callback: CallbackQuery) -> None:
-    amount = float(callback.data.split(":", 1)[1])
-    await _start_topup(callback, callback.from_user.id, callback.from_user.username, amount, edit=True)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "topup_custom")
-async def topup_custom(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(TopUp.waiting_amount)
-    await callback.message.edit_text(
-        "Введите сумму пополнения в рублях (целым числом), например 250:",
-        reply_markup=back_main_kb(),
-    )
-    await callback.answer()
-
-
-@router.message(StateFilter(TopUp.waiting_amount))
-async def topup_custom_amount(message: Message, state: FSMContext) -> None:
-    raw = (message.text or "").strip().replace(",", ".")
-    try:
-        amount = float(raw)
-    except ValueError:
-        amount = -1
-
-    if amount < 10:
-        await message.answer("Введите корректную сумму (минимум 10 ₽), например 250:")
-        return
-
-    await state.clear()
-    await _start_topup(message, message.from_user.id, message.from_user.username, amount, edit=False)
 
 
 async def _redeem_promo_for_user(user_id: int, username: str | None, code: str) -> str:
@@ -319,48 +188,6 @@ async def _redeem_promo_for_user(user_id: int, username: str | None, code: str) 
                 f"Ваша ссылка-подписка:\n{subscription_url}"
             )
     return text
-
-
-@router.callback_query(F.data == "promo")
-async def promo_prompt(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(Promo.waiting_code)
-    await callback.message.edit_text(
-        "🎟 Введите промокод:",
-        reply_markup=back_main_kb(),
-    )
-    await callback.answer()
-
-
-@router.message(StateFilter(Promo.waiting_code))
-async def promo_apply(message: Message, state: FSMContext) -> None:
-    code = (message.text or "").strip()
-    if not code:
-        await message.answer("Введите промокод текстом:")
-        return
-
-    await state.clear()
-
-    try:
-        text = await _redeem_promo_for_user(message.from_user.id, message.from_user.username, code)
-    except PromoError as e:
-        await message.answer(f"❌ {e}", reply_markup=main_menu_kb())
-        return
-    except ThreeXUIError:
-        logger.exception("3x-ui error while redeeming promo for tg_id=%s", message.from_user.id)
-        await message.answer(
-            "Промокод принят, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку.",
-            reply_markup=main_menu_kb(),
-        )
-        return
-    except Exception:
-        logger.exception("Unexpected error while redeeming promo for tg_id=%s", message.from_user.id)
-        await message.answer(
-            "Произошла непредвиденная ошибка при активации промокода. Попробуйте позже.",
-            reply_markup=main_menu_kb(),
-        )
-        return
-
-    await message.answer(text, reply_markup=main_menu_kb())
 
 
 @router.callback_query(F.data.startswith("promo_redeem:"))

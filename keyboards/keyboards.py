@@ -1,24 +1,22 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from config import PLANS, TOPUP_PRESETS_RUB, config
+from config import PLANS, config
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
-    rows = []
-    if config.webapp_url:
-        rows.append(
-            [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=config.webapp_url))]
-        )
-    rows += [
-        [InlineKeyboardButton(text="📱 Подключить устройство", callback_data="connect_device")],
-        [InlineKeyboardButton(text="🛒 Продлить подписку", callback_data="buy")],
-        [InlineKeyboardButton(text="💰 Баланс", callback_data="balance")],
-        [InlineKeyboardButton(text="🎟 Промокод", callback_data="promo")],
-        [InlineKeyboardButton(text="💻 Устройства", callback_data="devices")],
-        [InlineKeyboardButton(text="🐸 Поделиться подпиской", callback_data="share_sub")],
-        [InlineKeyboardButton(text="🤝 О сервисе", callback_data="about")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    if not config.webapp_url:
+        # Без настроенного webapp_url кнопки некуда открывать — отдаём пустую клавиатуру,
+        # чтобы не показывать пользователю нерабочие кнопки.
+        return InlineKeyboardMarkup(inline_keyboard=[])
+
+    base = config.webapp_url.rstrip("/")
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base))],
+            [InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"))],
+            [InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"))],
+        ]
+    )
 
 
 def back_main_kb() -> InlineKeyboardMarkup:
@@ -79,18 +77,3 @@ def invoice_kb(pay_url: str, invoice_id: str, provider: str = "cryptobot", back_
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
         ]
     )
-
-
-def balance_kb() -> InlineKeyboardMarkup:
-    rows = []
-    row = []
-    for amount in TOPUP_PRESETS_RUB:
-        row.append(InlineKeyboardButton(text=f"+{amount}₽", callback_data=f"topup:{amount}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup_custom")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
