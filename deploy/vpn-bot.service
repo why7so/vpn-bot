@@ -1,0 +1,16 @@
+[Unit]
+Description=Unnamed VPN Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+# Замените user и путь на ваши реальные значения
+User=user
+WorkingDirectory=/home/user/vpn-bot
+ExecStart=/home/user/vpn-bot/venv/bin/python /home/user/vpn-bot/main.py
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/home/user/vpn-bot/.env
+
+[Install]
+WantedBy=multi-user.target
