@@ -7,9 +7,13 @@
 Если подпись не сходится — значит запрос не от настоящего Telegram-клиента
 (его нельзя доверять), и мы отклоняем его.
 
-Это единственный способ авторизации в API: никаких паролей/сессий не нужно,
+Это основной способ авторизации в API: никаких паролей/сессий заводить не нужно,
 достаточно каждый раз проверять initData (он живёт достаточно долго в рамках
 одного открытия мини-приложения).
+
+Второй способ — для обычного браузера вне Telegram, где initData недоступен:
+`Authorization: Bearer <session_token>`, выданный через POST /api/browser-login
+(см. extract_bearer_session_token ниже и database/db.py).
 """
 
 from __future__ import annotations
@@ -65,5 +69,17 @@ def extract_bearer_init_data(authorization_header: str | None) -> str | None:
         return None
     parts = authorization_header.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "tma":
+        return None
+    return parts[1]
+
+
+def extract_bearer_session_token(authorization_header: str | None) -> str | None:
+    """Authorization: Bearer <session_token> — сессия обычного браузера
+    (не Telegram Mini App), выданная через POST /api/browser-login. См.
+    database/db.py: create_login_token / exchange_login_token."""
+    if not authorization_header:
+        return None
+    parts = authorization_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
         return None
     return parts[1]

@@ -1,13 +1,30 @@
 import datetime as dt
+import secrets
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import config
-from database.models import Base, Invoice, PromoCode, PromoRedemption, Subscription, User
+from database.models import (
+    Base,
+    BrowserSession,
+    Invoice,
+    LoginToken,
+    PromoCode,
+    PromoRedemption,
+    Subscription,
+    User,
+)
 
 engine = create_async_engine(f"sqlite+aiosqlite:///{config.db_path}")
 async_session = async_sessionmaker(engine, expire_on_commit=False)
+
+# Токен из /start weblogin живёт недолго — это просто "мостик" от бота к
+# браузеру, пользователь переходит по нему сразу же.
+LOGIN_TOKEN_TTL_SECONDS = 5 * 60
+# А вот браузерная сессия, которую он выдаёт при обмене, живёт долго —
+# чтобы не приходилось логиниться через бота при каждом визите на сайт.
+BROWSER_SESSION_TTL_DAYS = 30
 
 
 async def init_db() -> None:
@@ -250,3 +267,65 @@ async def redeem_promo_code(session: AsyncSession, code: str, user: User) -> Pro
     await session.commit()
     await session.refresh(promo)
     return promo
+
+
+# ---------- вход в веб-версию личного кабинета через браузер ----------
+# Схема: бот по /start weblogin выдаёт одноразовый LoginToken -> пользователь
+# переходит по ссылке на сайт -> сайт меняет его на долгоживущий
+# BrowserSession через POST /api/browser-login -> дальше сайт шлёт
+# `Authorization: Bearer <session_token>` вместо `tma <initData>`.
+
+
+async def create_login_token(session: AsyncSession, tg_id: int, username: str | None) -> str:
+    token = secrets.token_urlsafe(32)
+    session.add(
+        LoginToken(
+            token=token,
+            tg_id=tg_id,
+            username=username,
+            expires_at=dt.datetime.utcnow() + dt.timedelta(seconds=LOGIN_TOKEN_TTL_SECONDS),
+        )
+    )
+    await session.commit()
+    return token
+
+
+async def exchange_login_token(session: AsyncSession, token: str) -> BrowserSession | None:
+    """Одноразово гасит login-токен и создаёт взамен него браузерную сессию.
+    Возвращает None, если токен неизвестен, уже использован или истёк."""
+    result = await session.execute(select(LoginToken).where(LoginToken.token == token))
+    login_token = result.scalar_one_or_none()
+    if login_token is None or login_token.used_at is not None:
+        return None
+    if login_token.expires_at < dt.datetime.utcnow():
+        return None
+
+    login_token.used_at = dt.datetime.utcnow()
+    browser_session = BrowserSession(
+        token=secrets.token_urlsafe(32),
+        tg_id=login_token.tg_id,
+        username=login_token.username,
+        expires_at=dt.datetime.utcnow() + dt.timedelta(days=BROWSER_SESSION_TTL_DAYS),
+    )
+    session.add(browser_session)
+    await session.commit()
+    await session.refresh(browser_session)
+    return browser_session
+
+
+async def get_browser_session(session: AsyncSession, token: str) -> BrowserSession | None:
+    result = await session.execute(select(BrowserSession).where(BrowserSession.token == token))
+    browser_session = result.scalar_one_or_none()
+    if browser_session is None or browser_session.revoked_at is not None:
+        return None
+    if browser_session.expires_at < dt.datetime.utcnow():
+        return None
+    return browser_session
+
+
+async def revoke_browser_session(session: AsyncSession, token: str) -> None:
+    result = await session.execute(select(BrowserSession).where(BrowserSession.token == token))
+    browser_session = result.scalar_one_or_none()
+    if browser_session is not None and browser_session.revoked_at is None:
+        browser_session.revoked_at = dt.datetime.utcnow()
+        await session.commit()

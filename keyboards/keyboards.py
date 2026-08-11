@@ -1,3 +1,5 @@
+import urllib.parse
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from config import PLANS, config
@@ -12,9 +14,26 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     base = config.webapp_url.rstrip("/")
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base))],
-            [InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"))],
-            [InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"))],
+            [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base), style="Success")],
+            [InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")],
+            [InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")],
+            [InlineKeyboardButton(text="🌐 Открыть в браузере", callback_data="weblogin")],
+        ]
+    )
+
+
+def promo_result_kb(popup_text: str) -> InlineKeyboardMarkup:
+    """Кнопка открытия мини-приложения с результатом активации промокода.
+
+    Результат передаётся приложению через query-параметр ?promo_popup=...,
+    а не отдельным сообщением в чате: app.js при загрузке покажет его через
+    Telegram.WebApp.showPopup — нативное всплывающее окно.
+    """
+    base = config.webapp_url.rstrip("/")
+    url = f"{base}?promo_popup={urllib.parse.quote(popup_text)}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=url), style="Success")],
         ]
     )
 

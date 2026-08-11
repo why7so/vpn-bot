@@ -96,3 +96,40 @@ class PromoRedemption(Base):
     promo_id: Mapped[int] = mapped_column(ForeignKey("promo_codes.id"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     redeemed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class LoginToken(Base):
+    """Одноразовый токен для входа в веб-версию личного кабинета через браузер.
+
+    Выдаётся ботом по команде /start с параметром weblogin (см. handlers/user.py)
+    и живёт короткое время (см. LOGIN_TOKEN_TTL_SECONDS в database/db.py).
+    После одного успешного обмена на браузерную сессию (POST /api/browser-login)
+    помечается использованным и повторно применить его нельзя.
+    """
+
+    __tablename__ = "login_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String, unique=True, index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger)
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class BrowserSession(Base):
+    """Долгоживущая сессия для входа в личный кабинет из обычного браузера
+    (не Telegram Mini App). Токен хранится на фронтенде в localStorage и
+    передаётся как `Authorization: Bearer <token>` — аналог `tma <initData>`,
+    но для запросов вне Telegram-клиента."""
+
+    __tablename__ = "browser_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String, unique=True, index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger)
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

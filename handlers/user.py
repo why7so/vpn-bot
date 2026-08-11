@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import PLANS, config
 from database.db import (
@@ -12,6 +12,7 @@ from database.db import (
     async_session,
     consume_discount_use,
     create_invoice,
+    create_login_token,
     get_effective_discount,
     get_invoice_by_invoice_id,
     get_or_create_user,
@@ -28,6 +29,7 @@ from keyboards.keyboards import (
     main_menu_kb,
     payment_method_kb,
     plans_kb,
+    promo_result_kb,
 )
 from services.cryptobot_api import cryptopay_client
 from services.lava_api import lava_client
@@ -73,14 +75,44 @@ async def _render_profile(session, tg_id: int, username: str | None):
     return user, sub
 
 
+async def _issue_browser_login_link(user_id: int, username: str | None) -> str:
+    """Выдаёт одноразовую ссылку для входа в веб-версию личного кабинета
+    в обычном браузере (см. /api/browser-login в webapp/api.py)."""
+    async with async_session() as session:
+        token = await create_login_token(session, user_id, username)
+    return f"{config.webapp_url.rstrip('/')}?login_token={token}"
+
+
+def _browser_login_kb(login_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🌐 Открыть в браузере", url=login_url)]]
+    )
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject) -> None:
+    payload = (command.args or "").strip()
+
+    # Ссылка "Войти через Telegram" на сайте ведёт на t.me/<bot>?start=weblogin —
+    # выдаём одноразовую ссылку для входа в веб-версию в обычном браузере
+    # (не Mini App). Отдельная ветка, не смешивается с активацией промокодов.
+    if payload == "weblogin":
+        if not config.webapp_url:
+            await message.answer("Веб-версия личного кабинета пока не настроена.")
+            return
+        login_url = await _issue_browser_login_link(message.from_user.id, message.from_user.username)
+        await message.answer(
+            "🌐 Ссылка для входа в личный кабинет в браузере (одноразовая, "
+            "действует 5 минут):",
+            reply_markup=_browser_login_kb(login_url),
+        )
+        return
+
     # Кнопка "Активировать" у промокодов теперь ведёт на deep-link
     # https://t.me/<bot>?start=promo_<CODE> — это работает даже для тех, кто
     # никогда раньше не писал боту (в отличие от обычной callback-кнопки,
     # которую Telegram в таком случае просто не доставляет и открывает чат
     # с ботом без активации). Если параметр промокода есть — сразу активируем.
-    payload = (command.args or "").strip()
     promo_text = None
     if payload.startswith("promo_"):
         code = payload[len("promo_"):]
@@ -100,9 +132,33 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     async with async_session() as session:
         user, sub = await _render_profile(session, message.from_user.id, message.from_user.username)
 
-    if promo_text:
-        await message.answer(promo_text)
-    await message.answer(_profile_text(user, sub), reply_markup=main_menu_kb())
+    # Результат активации промокода теперь не отправляется отдельным
+    # сообщением в чат — вместо этого он передаётся мини-приложению через
+    # URL кнопки, и приложение показывает его всплывающим окном
+    # (Telegram.WebApp.showPopup) сразу после открытия. Если мини-приложение
+    # не настроено (нет WEBAPP_URL) — некуда показывать popup, тогда как
+    # раньше отправляем текст обычным сообщением.
+    if promo_text and config.webapp_url:
+        keyboard = promo_result_kb(_shorten_for_popup(promo_text))
+    else:
+        if promo_text:
+            await message.answer(promo_text)
+        keyboard = main_menu_kb()
+
+    await message.answer(_profile_text(user, sub), reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "weblogin")
+async def weblogin_button(callback: CallbackQuery) -> None:
+    if not config.webapp_url:
+        await callback.answer("Веб-версия личного кабинета пока не настроена.", show_alert=True)
+        return
+    login_url = await _issue_browser_login_link(callback.from_user.id, callback.from_user.username)
+    await callback.message.answer(
+        "🌐 Ссылка для входа в личный кабинет в браузере (одноразовая, действует 5 минут):",
+        reply_markup=_browser_login_kb(login_url),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "back_main")
@@ -139,6 +195,24 @@ async def connect_device(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(text, reply_markup=back_main_kb())
     await callback.answer()
+
+
+def _shorten_for_popup(text: str) -> str:
+    """Готовит текст результата промокода для Telegram.WebApp.showPopup.
+
+    showPopup ограничен 256 символами, а ссылка-подписка и так видна в
+    приложении на главном экране — поэтому обрезаем текст на строке с ней
+    (если она есть) и подстраховываемся на случай других длинных текстов.
+    """
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("Ваша ссылка-подписка"):
+            lines = lines[:i]
+            break
+    result = "\n".join(lines).rstrip()
+    if len(result) > 250:
+        result = result[:247].rstrip() + "..."
+    return result
 
 
 async def _redeem_promo_for_user(user_id: int, username: str | None, code: str) -> str:

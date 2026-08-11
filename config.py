@@ -42,6 +42,12 @@ class Config:
     # URL фронтенда мини-приложения (Vercel/Netlify), напр. https://myvpn.vercel.app
     # Если задан — в меню бота появится кнопка запуска.
     webapp_url: str = os.getenv("WEBAPP_URL", "")
+    # Короткое имя мини-приложения из @BotFather (Bot Settings -> Mini Apps ->
+    # short name), например "app". Нужно, чтобы кнопки промокодов
+    # (t.me/<bot>/<short_name>?startapp=...) открывали сразу мини-приложение,
+    # минуя чат с ботом. Если не задано — используется старый deep-link
+    # в чат бота (t.me/<bot>?start=...).
+    webapp_short_name: str = os.getenv("WEBAPP_SHORT_NAME", "")
     # Хост/порт, на котором поднимается HTTP API для мини-приложения (webapp/api.py).
     # Наружу должен быть доступен через reverse-proxy (nginx/caddy) с HTTPS.
     api_host: str = os.getenv("API_HOST", "0.0.0.0")

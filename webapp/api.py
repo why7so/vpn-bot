@@ -24,17 +24,20 @@ from database.db import (
     async_session,
     consume_discount_use,
     create_invoice,
+    exchange_login_token,
+    get_browser_session,
     get_effective_discount,
     get_invoice_by_invoice_id,
     get_or_create_user,
     get_subscription,
     mark_invoice_paid,
+    revoke_browser_session,
 )
 from handlers.user import _apply_discount, _grant_subscription, _redeem_promo_for_user
 from services.cryptobot_api import cryptopay_client
 from services.lava_api import lava_client
 from services.threexui_api import ThreeXUIError
-from webapp.auth import extract_bearer_init_data, validate_init_data
+from webapp.auth import extract_bearer_init_data, extract_bearer_session_token, validate_init_data
 
 logger = logging.getLogger(__name__)
 
@@ -48,21 +51,35 @@ class ApiError(Exception):
         self.status = status
 
 
-def _tg_user_from_request(request: web.Request) -> dict:
-    """Достаёт и проверяет initData из заголовка Authorization. Бросает ApiError(401), если невалидно."""
-    init_data = extract_bearer_init_data(request.headers.get("Authorization"))
-    if init_data is None:
-        # запасной вариант — из query-параметра, вдруг фронту так удобнее для GET
-        init_data = request.query.get("init_data")
+async def _tg_user_from_request(request: web.Request) -> dict:
+    """Достаёт tg-пользователя из запроса. Поддерживает два способа авторизации:
 
-    parsed = validate_init_data(init_data or "", config.bot_token)
-    if parsed is None:
-        raise ApiError("Неверная или устаревшая авторизация Telegram WebApp", status=401)
+    1. Telegram Mini App: `Authorization: tma <initData>` — подпись проверяется
+       ключом бота (см. webapp/auth.py::validate_init_data).
+    2. Обычный браузер вне Telegram: `Authorization: Bearer <session_token>`,
+       выданный через POST /api/browser-login после перехода по одноразовой
+       ссылке из бота (команда /start weblogin, см. handlers/user.py).
 
-    user = parsed.get("user")
-    if not isinstance(user, dict) or "id" not in user:
-        raise ApiError("В initData нет данных пользователя", status=401)
-    return user
+    Бросает ApiError(401), если ни один способ не подошёл.
+    """
+    authorization = request.headers.get("Authorization")
+
+    init_data = extract_bearer_init_data(authorization) or request.query.get("init_data")
+    if init_data:
+        parsed = validate_init_data(init_data, config.bot_token)
+        if parsed is not None:
+            user = parsed.get("user")
+            if isinstance(user, dict) and "id" in user:
+                return user
+
+    session_token = extract_bearer_session_token(authorization) or request.query.get("session_token")
+    if session_token:
+        async with async_session() as session:
+            browser_session = await get_browser_session(session, session_token)
+        if browser_session is not None:
+            return {"id": browser_session.tg_id, "username": browser_session.username}
+
+    raise ApiError("Неверная или устаревшая авторизация", status=401)
 
 
 def _profile_json(user, sub) -> dict:
@@ -106,9 +123,48 @@ async def get_plans(request: web.Request) -> web.Response:
     )
 
 
+@routes.post("/api/browser-login")
+async def browser_login(request: web.Request) -> web.Response:
+    """Обменивает одноразовый login-токен (из ссылки /start weblogin в боте)
+    на долгоживущую сессию для обычного браузера. Токена в теле запроса
+    достаточно — сам факт его знания подтверждает переход по ссылке из бота."""
+    body = await request.json()
+    token = (body.get("token") or "").strip()
+    if not token:
+        raise ApiError("Не указан токен входа")
+
+    async with async_session() as session:
+        browser_session = await exchange_login_token(session, token)
+    if browser_session is None:
+        raise ApiError(
+            "Ссылка для входа недействительна, устарела или уже использована. "
+            "Запросите новую в боте: /start weblogin",
+            status=401,
+        )
+
+    return web.json_response(
+        {
+            "session_token": browser_session.token,
+            "tg_id": browser_session.tg_id,
+            "username": browser_session.username,
+        }
+    )
+
+
+@routes.post("/api/logout")
+async def logout(request: web.Request) -> web.Response:
+    """Отзывает браузерную сессию (Authorization: Bearer <session_token>).
+    На Telegram Mini App (tma initData) не влияет — там сессий нет."""
+    session_token = extract_bearer_session_token(request.headers.get("Authorization"))
+    if session_token:
+        async with async_session() as session:
+            await revoke_browser_session(session, session_token)
+    return web.json_response({"status": "ok"})
+
+
 @routes.get("/api/me")
 async def get_me(request: web.Request) -> web.Response:
-    tg_user = _tg_user_from_request(request)
+    tg_user = await _tg_user_from_request(request)
     async with async_session() as session:
         user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
         sub = await get_subscription(session, user.id)
@@ -118,7 +174,7 @@ async def get_me(request: web.Request) -> web.Response:
 
 @routes.get("/api/devices")
 async def get_devices(request: web.Request) -> web.Response:
-    _tg_user_from_request(request)  # только проверяем авторизацию
+    await _tg_user_from_request(request)  # только проверяем авторизацию
     return web.json_response(
         {
             "message": (
@@ -131,7 +187,7 @@ async def get_devices(request: web.Request) -> web.Response:
 
 @routes.post("/api/promo")
 async def redeem_promo(request: web.Request) -> web.Response:
-    tg_user = _tg_user_from_request(request)
+    tg_user = await _tg_user_from_request(request)
     body = await request.json()
     code = (body.get("code") or "").strip()
     if not code:
@@ -150,7 +206,7 @@ async def redeem_promo(request: web.Request) -> web.Response:
 
 @routes.post("/api/topup")
 async def topup(request: web.Request) -> web.Response:
-    tg_user = _tg_user_from_request(request)
+    tg_user = await _tg_user_from_request(request)
     body = await request.json()
     try:
         amount = float(body.get("amount"))
@@ -185,7 +241,7 @@ async def topup(request: web.Request) -> web.Response:
 @routes.post("/api/purchase")
 async def purchase(request: web.Request) -> web.Response:
     """provider: free | balance | cryptobot | lava"""
-    tg_user = _tg_user_from_request(request)
+    tg_user = await _tg_user_from_request(request)
     body = await request.json()
     plan_code = body.get("plan_code")
     provider = body.get("provider")
@@ -287,7 +343,7 @@ async def purchase(request: web.Request) -> web.Response:
 async def invoice_status(request: web.Request) -> web.Response:
     """Проверяет статус счёта у провайдера и, если оплачен, выдаёт доступ/зачисляет баланс
     (аналог кнопки «Я оплатил» в боте). Идемпотентно — повторные вызовы после выдачи безопасны."""
-    tg_user = _tg_user_from_request(request)
+    tg_user = await _tg_user_from_request(request)
     invoice_id = request.match_info["invoice_id"]
 
     async with async_session() as session:

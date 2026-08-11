@@ -62,12 +62,19 @@ def _promo_value_text(promo) -> str:
 
 
 def _promo_button_kb(bot_username: str, code: str) -> InlineKeyboardMarkup:
-    # Deep-link (t.me/<bot>?start=promo_<CODE>), а не callback_data: callback-кнопка
-    # не доставляется пользователю, который ни разу не писал боту (Telegram в этом
-    # случае просто открывает чат с ботом без активации кода). Deep-link открывает
-    # бота с кнопкой Start и после неё промокод активируется автоматически — см.
-    # обработку payload в handlers/user.py::cmd_start.
-    url = f"https://t.me/{bot_username}?start=promo_{code}"
+    # Раньше использовался deep-link в чат с ботом (t.me/<bot>?start=...),
+    # потому что callback-кнопка не доставляется пользователю, который ни
+    # разу не писал боту. Теперь, если в @BotFather настроено мини-приложение
+    # с коротким именем (WEBAPP_SHORT_NAME), используем прямую ссылку на
+    # Mini App — t.me/<bot>/<short_name>?startapp=... . Она тоже работает
+    # для любого пользователя без диалога с ботом, но открывает сразу
+    # приложение, а не чат: Telegram передаёт startapp-параметр в
+    # window.Telegram.WebApp.initDataUnsafe.start_param, и app.js сам
+    # активирует промокод и покажет результат всплывающим окном.
+    if config.webapp_short_name:
+        url = f"https://t.me/{bot_username}/{config.webapp_short_name}?startapp=promo_{code}"
+    else:
+        url = f"https://t.me/{bot_username}?start=promo_{code}"
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🎁 Активировать", url=url)]]
     )

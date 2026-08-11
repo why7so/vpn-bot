@@ -43,7 +43,7 @@ async def main() -> None:
         # Постоянная синяя кнопка меню рядом с полем ввода в Telegram-клиенте,
         # открывающая мини-приложение (личный кабинет).
         await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="Личный кабинет", web_app=WebAppInfo(url=config.webapp_url))
+            menu_button=MenuButtonWebApp(text="Профиль", web_app=WebAppInfo(url=config.webapp_url))
         )
         logger.info("WebApp menu button set to %s", config.webapp_url)
     else:
