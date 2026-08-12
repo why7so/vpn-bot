@@ -19,6 +19,7 @@ from database.db import (
     get_subscription,
     mark_invoice_paid,
     redeem_promo_code,
+    set_login_token_message,
     set_user_discount,
     set_vpn_client_uuid,
     upsert_subscription,
@@ -32,7 +33,7 @@ from keyboards.keyboards import (
     promo_result_kb,
 )
 from services.cryptobot_api import cryptopay_client
-from services.platega_api import platega_client
+from services.platega_api import PlategaError, platega_client
 from services.vpn_provider import VpnProviderError, vpn_client
 
 router = Router(name="user")
@@ -75,12 +76,15 @@ async def _render_profile(session, tg_id: int, username: str | None):
     return user, sub
 
 
-async def _issue_browser_login_link(user_id: int, username: str | None) -> str:
+async def _issue_browser_login_link(user_id: int, username: str | None) -> tuple[str, str]:
     """Выдаёт одноразовую ссылку для входа в веб-версию личного кабинета
-    в обычном браузере (см. /api/browser-login в webapp/api.py)."""
+    в обычном браузере (см. /api/browser-login в webapp/api.py).
+    Возвращает (token, login_url) — token нужен, чтобы потом привязать
+    к нему отправленное сообщение (см. set_login_token_message)."""
     async with async_session() as session:
         token = await create_login_token(session, user_id, username)
-    return f"{config.webapp_url.rstrip('/')}?login_token={token}"
+    login_url = f"{config.webapp_url.rstrip('/')}?login_token={token}"
+    return token, login_url
 
 
 def _browser_login_kb(login_url: str) -> InlineKeyboardMarkup:
@@ -100,12 +104,14 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         if not config.webapp_url:
             await message.answer("Веб-версия личного кабинета пока не настроена.")
             return
-        login_url = await _issue_browser_login_link(message.from_user.id, message.from_user.username)
-        await message.answer(
+        login_token, login_url = await _issue_browser_login_link(message.from_user.id, message.from_user.username)
+        sent = await message.answer(
             "🌐 Ссылка для входа в личный кабинет в браузере (одноразовая, "
             "действует 5 минут):",
             reply_markup=_browser_login_kb(login_url),
         )
+        async with async_session() as session:
+            await set_login_token_message(session, login_token, sent.chat.id, sent.message_id)
         return
 
     # Кнопка "Активировать" у промокодов теперь ведёт на deep-link
@@ -153,11 +159,13 @@ async def weblogin_button(callback: CallbackQuery) -> None:
     if not config.webapp_url:
         await callback.answer("Веб-версия личного кабинета пока не настроена.", show_alert=True)
         return
-    login_url = await _issue_browser_login_link(callback.from_user.id, callback.from_user.username)
-    await callback.message.answer(
+    login_token, login_url = await _issue_browser_login_link(callback.from_user.id, callback.from_user.username)
+    sent = await callback.message.answer(
         "🌐 Ссылка для входа в личный кабинет в браузере (одноразовая, действует 5 минут):",
         reply_markup=_browser_login_kb(login_url),
     )
+    async with async_session() as session:
+        await set_login_token_message(session, login_token, sent.chat.id, sent.message_id)
     await callback.answer()
 
 
@@ -455,13 +463,20 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
 
         if provider == "platega":
-            invoice = await platega_client.create_invoice(
-                amount_rub=price_rub,
-                comment=f"{config.vpn_name}: подписка {plan['title']}",
-                order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
-                user_id=user.tg_id,
-                username=callback.from_user.username,
-            )
+            try:
+                invoice = await platega_client.create_invoice(
+                    amount_rub=price_rub,
+                    comment=f"{config.vpn_name}: подписка {plan['title']}",
+                    order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
+                    user_id=user.tg_id,
+                    username=callback.from_user.username,
+                )
+            except PlategaError:
+                logger.exception("Platega error while creating purchase invoice for tg_id=%s", user.tg_id)
+                await callback.answer(
+                    "Не удалось создать счёт на оплату. Попробуйте позже.", show_alert=True
+                )
+                return
             await create_invoice(
                 session,
                 user_id=user.id,

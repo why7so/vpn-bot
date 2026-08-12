@@ -56,7 +56,7 @@ async def main() -> None:
     # HTTP API для мини-приложения (webapp/api.py) — отдельный aiohttp-сервер,
     # работает параллельно с поллингом бота. Наружу должен быть проброшен через
     # reverse-proxy (nginx/caddy) с HTTPS на домене из API_CORS_ORIGIN/WEBAPP_URL.
-    api_app = create_app()
+    api_app = create_app(bot)
     runner = web.AppRunner(api_app)
     await runner.setup()
     site = web.TCPSite(runner, config.api_host, config.api_port)

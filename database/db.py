@@ -30,6 +30,23 @@ BROWSER_SESSION_TTL_DAYS = 30
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_login_token_columns(conn)
+
+
+async def _ensure_login_token_columns(conn) -> None:
+    """Лёгкая сам-миграция для SQLite: create_all не добавляет новые колонки
+    в уже существующие таблицы. chat_id/message_id в login_tokens появились
+    позже — добавляем их, если ещё нет (для свежих БД они и так будут
+    созданы через create_all выше, тогда ALTER TABLE просто не понадобится)."""
+
+    def _add_missing_columns(sync_conn):
+        existing = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(login_tokens)").fetchall()}
+        if "chat_id" not in existing:
+            sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN chat_id INTEGER")
+        if "message_id" not in existing:
+            sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN message_id INTEGER")
+
+    await conn.run_sync(_add_missing_columns)
 
 
 async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | None) -> User:
@@ -290,7 +307,28 @@ async def create_login_token(session: AsyncSession, tg_id: int, username: str | 
     return token
 
 
-async def exchange_login_token(session: AsyncSession, token: str) -> BrowserSession | None:
+async def set_login_token_message(session: AsyncSession, token: str, chat_id: int, message_id: int) -> None:
+    """Запоминает, в каком сообщении бота лежит кнопка "Открыть в браузере",
+    чтобы после успешного входа отредактировать именно его."""
+    result = await session.execute(select(LoginToken).where(LoginToken.token == token))
+    login_token = result.scalar_one_or_none()
+    if login_token is None:
+        return
+    login_token.chat_id = chat_id
+    login_token.message_id = message_id
+    await session.commit()
+
+
+class LoginResult:
+    __slots__ = ("browser_session", "chat_id", "message_id")
+
+    def __init__(self, browser_session: BrowserSession, chat_id: int | None, message_id: int | None) -> None:
+        self.browser_session = browser_session
+        self.chat_id = chat_id
+        self.message_id = message_id
+
+
+async def exchange_login_token(session: AsyncSession, token: str) -> LoginResult | None:
     """Одноразово гасит login-токен и создаёт взамен него браузерную сессию.
     Возвращает None, если токен неизвестен, уже использован или истёк."""
     result = await session.execute(select(LoginToken).where(LoginToken.token == token))
@@ -310,7 +348,7 @@ async def exchange_login_token(session: AsyncSession, token: str) -> BrowserSess
     session.add(browser_session)
     await session.commit()
     await session.refresh(browser_session)
-    return browser_session
+    return LoginResult(browser_session, login_token.chat_id, login_token.message_id)
 
 
 async def get_browser_session(session: AsyncSession, token: str) -> BrowserSession | None:

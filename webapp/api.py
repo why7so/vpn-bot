@@ -35,7 +35,7 @@ from database.db import (
 )
 from handlers.user import _apply_discount, _grant_subscription, _redeem_promo_for_user
 from services.cryptobot_api import cryptopay_client
-from services.platega_api import platega_client
+from services.platega_api import PlategaError, platega_client
 from services.vpn_provider import VpnProviderError
 from webapp.auth import extract_bearer_init_data, extract_bearer_session_token, validate_init_data
 
@@ -134,14 +134,36 @@ async def browser_login(request: web.Request) -> web.Response:
         raise ApiError("Не указан токен входа")
 
     async with async_session() as session:
-        browser_session = await exchange_login_token(session, token)
-    if browser_session is None:
+        login_result = await exchange_login_token(session, token)
+    if login_result is None:
         raise ApiError(
             "Ссылка для входа недействительна, устарела или уже использована. "
             "Запросите новую в боте: /start weblogin",
             status=401,
         )
 
+    # Редактируем исходное сообщение с кнопкой "Открыть в браузере" в чате бота:
+    # убираем кнопку и показываем, что вход уже выполнен, чтобы по одноразовой
+    # ссылке нельзя было (и незачем) нажать ещё раз.
+    bot = request.app.get("bot")
+    if bot is not None and login_result.chat_id and login_result.message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=login_result.chat_id,
+                message_id=login_result.message_id,
+                text="✅ Вход выполнен успешно! Можно вернуться в браузер — личный кабинет уже открыт.",
+                reply_markup=None,
+            )
+        except Exception:
+            # Сообщение могли уже удалить/отредактировать вручную — это не повод
+            # ронять сам вход, пользователь уже получил сессию ниже.
+            logger.exception(
+                "Не удалось отредактировать сообщение с кнопкой входа (chat_id=%s, message_id=%s)",
+                login_result.chat_id,
+                login_result.message_id,
+            )
+
+    browser_session = login_result.browser_session
     return web.json_response(
         {
             "session_token": browser_session.token,
@@ -217,13 +239,17 @@ async def topup(request: web.Request) -> web.Response:
 
     async with async_session() as session:
         user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
-        invoice = await platega_client.create_invoice(
-            amount_rub=amount,
-            comment=f"{config.vpn_name}: пополнение баланса",
-            order_id=f"topup-user{user.tg_id}-{int(dt.datetime.utcnow().timestamp())}",
-            user_id=user.tg_id,
-            username=tg_user.get("username"),
-        )
+        try:
+            invoice = await platega_client.create_invoice(
+                amount_rub=amount,
+                comment=f"{config.vpn_name}: пополнение баланса",
+                order_id=f"topup-user{user.tg_id}-{int(dt.datetime.utcnow().timestamp())}",
+                user_id=user.tg_id,
+                username=tg_user.get("username"),
+            )
+        except PlategaError as e:
+            logger.exception("Platega error while creating topup invoice for tg_id=%s", user.tg_id)
+            raise ApiError("Не удалось создать счёт на оплату. Попробуйте позже", status=502) from e
         await create_invoice(
             session,
             user_id=user.id,
@@ -292,13 +318,17 @@ async def purchase(request: web.Request) -> web.Response:
         # provider in (cryptobot, platega) -> выставляем счёт, оплата и выдача доступа — отдельным шагом
         # через GET /api/invoice/{id} (аналог кнопки "Я оплатил" в боте)
         if provider == "platega":
-            invoice = await platega_client.create_invoice(
-                amount_rub=price_rub,
-                comment=f"{config.vpn_name}: подписка {plan['title']}",
-                order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
-                user_id=user.tg_id,
-                username=tg_user.get("username"),
-            )
+            try:
+                invoice = await platega_client.create_invoice(
+                    amount_rub=price_rub,
+                    comment=f"{config.vpn_name}: подписка {plan['title']}",
+                    order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
+                    user_id=user.tg_id,
+                    username=tg_user.get("username"),
+                )
+            except PlategaError as e:
+                logger.exception("Platega error while creating purchase invoice for tg_id=%s", user.tg_id)
+                raise ApiError("Не удалось создать счёт на оплату. Попробуйте позже", status=502) from e
             await create_invoice(
                 session,
                 user_id=user.id,
@@ -415,9 +445,13 @@ async def cors_middleware(request: web.Request, handler):
     return resp
 
 
-def create_app() -> web.Application:
+def create_app(bot=None) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
     app.add_routes(routes)
+    # bot нужен только для редактирования сообщения с кнопкой "Открыть в браузере"
+    # после успешного входа (см. /api/browser-login выше). Без него всё остальное
+    # API продолжит работать как обычно, просто без этой мелкой полировки UX.
+    app["bot"] = bot
 
     # aiohttp по умолчанию не роутит OPTIONS для каждого маршрута — добавляем catch-all
     # для preflight-запросов браузера.

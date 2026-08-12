@@ -17,7 +17,6 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base), style="Success")],
             [InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")],
             [InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")],
-            [InlineKeyboardButton(text="🌐 Открыть в браузере", callback_data="weblogin")],
         ]
     )
 

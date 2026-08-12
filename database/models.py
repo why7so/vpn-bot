@@ -119,6 +119,10 @@ class LoginToken(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
     used_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Сообщение в Telegram-чате с кнопкой "Открыть в браузере" — чтобы после
+    # успешного входа отредактировать его (убрать кнопку, показать успех).
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class BrowserSession(Base):
