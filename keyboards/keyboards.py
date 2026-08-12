@@ -81,14 +81,14 @@ def payment_method_kb(
         [InlineKeyboardButton(text="💎 Крипта (CryptoBot)", callback_data=f"paymethod:{plan_code}:cryptobot")]
     )
     rows.append(
-        [InlineKeyboardButton(text="💳 Рубли — карта/СБП (LAVA)", callback_data=f"paymethod:{plan_code}:lava")]
+        [InlineKeyboardButton(text="💳 СБП (Platega)", callback_data=f"paymethod:{plan_code}:platega")]
     )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def invoice_kb(pay_url: str, invoice_id: str, provider: str = "cryptobot", back_callback: str = "buy") -> InlineKeyboardMarkup:
-    label = "💳 Оплатить в CryptoBot" if provider == "cryptobot" else "💳 Оплатить (LAVA)"
+    label = "💳 Оплатить в CryptoBot" if provider == "cryptobot" else "💳 Оплатить через СБП"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, url=pay_url)],

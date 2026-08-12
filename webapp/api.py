@@ -35,7 +35,7 @@ from database.db import (
 )
 from handlers.user import _apply_discount, _grant_subscription, _redeem_promo_for_user
 from services.cryptobot_api import cryptopay_client
-from services.lava_api import lava_client
+from services.platega_api import platega_client
 from services.threexui_api import ThreeXUIError
 from webapp.auth import extract_bearer_init_data, extract_bearer_session_token, validate_init_data
 
@@ -217,7 +217,7 @@ async def topup(request: web.Request) -> web.Response:
 
     async with async_session() as session:
         user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
-        invoice = await lava_client.create_invoice(
+        invoice = await platega_client.create_invoice(
             amount_rub=amount,
             comment=f"{config.vpn_name}: пополнение баланса",
             order_id=f"topup-user{user.tg_id}-{int(dt.datetime.utcnow().timestamp())}",
@@ -229,7 +229,7 @@ async def topup(request: web.Request) -> web.Response:
             pay_url=invoice["pay_url"],
             amount=amount,
             purpose="topup",
-            provider="lava",
+            provider="platega",
             currency="RUB",
         )
 
@@ -240,7 +240,7 @@ async def topup(request: web.Request) -> web.Response:
 
 @routes.post("/api/purchase")
 async def purchase(request: web.Request) -> web.Response:
-    """provider: free | balance | cryptobot | lava"""
+    """provider: free | balance | cryptobot | platega"""
     tg_user = await _tg_user_from_request(request)
     body = await request.json()
     plan_code = body.get("plan_code")
@@ -249,7 +249,7 @@ async def purchase(request: web.Request) -> web.Response:
     plan = next((p for p in PLANS if p["code"] == plan_code), None)
     if plan is None:
         raise ApiError("Такого плана не существует")
-    if provider not in ("free", "balance", "cryptobot", "lava"):
+    if provider not in ("free", "balance", "cryptobot", "platega"):
         raise ApiError("Некорректный способ оплаты")
 
     async with async_session() as session:
@@ -287,10 +287,10 @@ async def purchase(request: web.Request) -> web.Response:
                 await consume_discount_use(session, user)
             return web.json_response({"status": "granted", "subscription_url": subscription_url})
 
-        # provider in (cryptobot, lava) -> выставляем счёт, оплата и выдача доступа — отдельным шагом
+        # provider in (cryptobot, platega) -> выставляем счёт, оплата и выдача доступа — отдельным шагом
         # через GET /api/invoice/{id} (аналог кнопки "Я оплатил" в боте)
-        if provider == "lava":
-            invoice = await lava_client.create_invoice(
+        if provider == "platega":
+            invoice = await platega_client.create_invoice(
                 amount_rub=price_rub,
                 comment=f"{config.vpn_name}: подписка {plan['title']}",
                 order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
@@ -303,7 +303,7 @@ async def purchase(request: web.Request) -> web.Response:
                 pay_url=invoice["pay_url"],
                 amount=price_rub,
                 purpose="subscription",
-                provider="lava",
+                provider="platega",
                 currency="RUB",
                 discount_percent=discount,
             )
@@ -354,8 +354,8 @@ async def invoice_status(request: web.Request) -> web.Response:
         if local_invoice.status == "paid":
             return web.json_response({"status": "paid", "already_processed": True})
 
-        if local_invoice.provider == "lava":
-            remote_invoice = await lava_client.get_invoice(invoice_id)
+        if local_invoice.provider == "platega":
+            remote_invoice = await platega_client.get_invoice(invoice_id)
         else:
             remote_invoice = await cryptopay_client.get_invoice(invoice_id)
 

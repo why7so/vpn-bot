@@ -32,7 +32,7 @@ from keyboards.keyboards import (
     promo_result_kb,
 )
 from services.cryptobot_api import cryptopay_client
-from services.lava_api import lava_client
+from services.platega_api import platega_client
 from services.threexui_api import ThreeXUIError, threexui_client
 
 router = Router(name="user")
@@ -454,8 +454,8 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
 
-        if provider == "lava":
-            invoice = await lava_client.create_invoice(
+        if provider == "platega":
+            invoice = await platega_client.create_invoice(
                 amount_rub=price_rub,
                 comment=f"{config.vpn_name}: подписка {plan['title']}",
                 order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
@@ -468,7 +468,7 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 pay_url=invoice["pay_url"],
                 amount=price_rub,
                 purpose="subscription",
-                provider="lava",
+                provider="platega",
                 currency="RUB",
                 discount_percent=discount,
             )
@@ -515,8 +515,8 @@ async def check_payment(callback: CallbackQuery) -> None:
             await callback.answer("Этот счёт уже был оплачен ранее ✅", show_alert=True)
             return
 
-        if local_invoice.provider == "lava":
-            remote_invoice = await lava_client.get_invoice(invoice_id)
+        if local_invoice.provider == "platega":
+            remote_invoice = await platega_client.get_invoice(invoice_id)
         else:
             remote_invoice = await cryptopay_client.get_invoice(invoice_id)
 

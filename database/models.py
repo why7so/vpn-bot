@@ -38,7 +38,7 @@ class Subscription(Base):
 
 
 class Invoice(Base):
-    """Счёт, выставленный через один из платёжных провайдеров (CryptoBot, LAVA)."""
+    """Счёт, выставленный через один из платёжных провайдеров (CryptoBot, Platega)."""
 
     __tablename__ = "invoices"
 
@@ -46,7 +46,7 @@ class Invoice(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     plan_code: Mapped[str | None] = mapped_column(String, nullable=True)
     purpose: Mapped[str] = mapped_column(String, default="subscription")  # subscription | topup
-    provider: Mapped[str] = mapped_column(String, default="cryptobot")  # cryptobot | lava
+    provider: Mapped[str] = mapped_column(String, default="cryptobot")  # cryptobot | platega
     invoice_id: Mapped[str] = mapped_column(String, unique=True)  # id счёта у провайдера
     pay_url: Mapped[str] = mapped_column(String)
     amount: Mapped[float] = mapped_column(Float)

@@ -28,11 +28,12 @@ class Config:
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")
     crypto_pay_api_url: str = os.getenv("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api")
 
-    # --- LAVA (lava.ru) — оплата в рублях картой/СБП через кошелёк LAVA ---
-    # Токен: lava.ru/dashboard/settings/api
-    # Для приёма платежей нужен статус самозанятого/ИП и модерация проекта в ЛК LAVA.
-    lava_api_token: str = os.getenv("LAVA_API_TOKEN", "")
-    lava_api_url: str = os.getenv("LAVA_API_URL", "https://api.lava.ru")
+    # --- Platega (platega.io) — оплата в рублях через СБП ---
+    # MerchantId и Secret выдаются менеджером при подключении, также доступны
+    # в личном кабинете на странице «Настройки». Документация: https://docs.platega.io/
+    platega_merchant_id: str = os.getenv("PLATEGA_MERCHANT_ID", "")
+    platega_secret: str = os.getenv("PLATEGA_SECRET", "")
+    platega_api_url: str = os.getenv("PLATEGA_API_URL", "https://app.platega.io")
 
     db_path: str = os.getenv("DB_PATH", "bot.db")
     support_username: str = os.getenv("SUPPORT_USERNAME", "")
@@ -63,7 +64,7 @@ PLANS = [
     {"code": "12m", "title": "12 месяцев", "days": 365, "price_usdt": 30.0, "price_rub": 2990},
 ]
 
-# Пресеты пополнения баланса (в рублях, оплата через LAVA)
+# Пресеты пополнения баланса (в рублях, оплата через Platega/СБП)
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
 
 config = Config()
