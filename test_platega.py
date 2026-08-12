@@ -18,10 +18,25 @@
 
 import asyncio
 
+from config import config
 from services.platega_api import platega_client
 
 
+def _mask(value: str) -> str:
+    if not value:
+        return "<пусто>"
+    if len(value) <= 8:
+        return value[0] + "…" + value[-1]
+    return value[:4] + "…" + value[-4:] + f" (длина {len(value)})"
+
+
 async def main():
+    print("Проверяю, что реально загружено из .env:")
+    print("  PLATEGA_MERCHANT_ID:", _mask(config.platega_merchant_id))
+    print("  PLATEGA_SECRET:     ", _mask(config.platega_secret))
+    print("  PLATEGA_API_URL:    ", config.platega_api_url)
+    print()
+
     print("Создаю тестовый счёт на 10 ₽ через СБП...")
     invoice = await platega_client.create_invoice(
         amount_rub=10,
