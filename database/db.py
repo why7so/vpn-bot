@@ -54,8 +54,8 @@ async def get_user_by_username(session: AsyncSession, username: str) -> User | N
     return result.scalar_one_or_none()
 
 
-async def set_xui_client_uuid(session: AsyncSession, user: User, client_uuid: str) -> None:
-    user.xui_client_uuid = client_uuid
+async def set_vpn_client_uuid(session: AsyncSession, user: User, client_uuid: str) -> None:
+    user.vpn_client_uuid = client_uuid
     await session.commit()
 
 

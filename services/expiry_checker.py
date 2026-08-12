@@ -1,6 +1,6 @@
 """
 Фоновая задача: раз в день проверяет подписки.
-- если истекла - отключает клиента в 3x-ui;
+- если истекла - отключает клиента у VPN-провайдера;
 - если истекает в ближайшие 3 дня - шлёт напоминание в Telegram.
 """
 
@@ -11,7 +11,7 @@ from aiogram import Bot
 
 from database.db import all_active_subscriptions, async_session
 from database.models import User
-from services.threexui_api import threexui_client
+from services.vpn_provider import vpn_client
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,9 @@ async def check_expirations(bot: Bot) -> None:
 
             if sub.expires_at <= now:
                 try:
-                    await threexui_client.disable_by_email(threexui_client.build_email(user.tg_id))
+                    await vpn_client.disable_by_email(vpn_client.build_email(user.tg_id))
                 except Exception:
-                    logger.exception("Не удалось отключить клиента %s в 3x-ui", user.tg_id)
+                    logger.exception("Не удалось отключить клиента %s у VPN-провайдера", user.tg_id)
                 continue
 
             if now < sub.expires_at <= soon:

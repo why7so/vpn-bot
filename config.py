@@ -16,14 +16,13 @@ class Config:
     bot_token: str = os.getenv("BOT_TOKEN", "")
     admin_ids: list[int] = field(default_factory=_get_admin_ids)
 
-    xui_base_url: str = os.getenv("XUI_BASE_URL", "").rstrip("/")
-    xui_username: str = os.getenv("XUI_USERNAME", "")
-    xui_password: str = os.getenv("XUI_PASSWORD", "")
-    xui_inbound_id: int = int(os.getenv("XUI_INBOUND_ID", "1"))
-    xui_email_prefix: str = os.getenv("XUI_EMAIL_PREFIX", "tgbot_")
-    # Базовый URL сервиса подписок 3x-ui (Settings -> Subscription Settings),
-    # например https://your-panel.example.com:2096/sub
-    xui_sub_base_url: str = os.getenv("XUI_SUB_BASE_URL", "").rstrip("/")
+    # --- Выдача VPN-доступа ---
+    # Раньше здесь была конфигурация 3x-ui, сейчас интеграция отключена.
+    # services/vpn_provider.py — временная заглушка; когда подключим
+    # собственный мастер-сервер, реквизиты для него пойдут сюда:
+    master_api_base_url: str = os.getenv("MASTER_API_BASE_URL", "")
+    master_api_token: str = os.getenv("MASTER_API_TOKEN", "")
+    vpn_email_prefix: str = os.getenv("VPN_EMAIL_PREFIX", "tgbot_")
 
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")
     crypto_pay_api_url: str = os.getenv("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api")

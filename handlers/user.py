@@ -20,7 +20,7 @@ from database.db import (
     mark_invoice_paid,
     redeem_promo_code,
     set_user_discount,
-    set_xui_client_uuid,
+    set_vpn_client_uuid,
     upsert_subscription,
 )
 from keyboards.keyboards import (
@@ -33,7 +33,7 @@ from keyboards.keyboards import (
 )
 from services.cryptobot_api import cryptopay_client
 from services.platega_api import platega_client
-from services.threexui_api import ThreeXUIError, threexui_client
+from services.vpn_provider import VpnProviderError, vpn_client
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
@@ -120,8 +120,8 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             promo_text = await _redeem_promo_for_user(message.from_user.id, message.from_user.username, code)
         except PromoError as e:
             promo_text = f"❌ {e}"
-        except ThreeXUIError:
-            logger.exception("3x-ui error while redeeming promo (deep-link) for tg_id=%s", message.from_user.id)
+        except VpnProviderError:
+            logger.exception("VPN provider error while redeeming promo (deep-link) for tg_id=%s", message.from_user.id)
             promo_text = (
                 "Промокод принят, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку."
             )
@@ -216,7 +216,7 @@ def _shorten_for_popup(text: str) -> str:
 
 
 async def _redeem_promo_for_user(user_id: int, username: str | None, code: str) -> str:
-    """Активирует промокод и возвращает готовый текст ответа. Бросает PromoError/ThreeXUIError."""
+    """Активирует промокод и возвращает готовый текст ответа. Бросает PromoError/VpnProviderError."""
     async with async_session() as session:
         user = await get_or_create_user(session, user_id, username)
         promo = await redeem_promo_code(session, code, user)
@@ -273,8 +273,8 @@ async def promo_redeem_button(callback: CallbackQuery, bot: Bot) -> None:
     except PromoError as e:
         await callback.answer(str(e), show_alert=True)
         return
-    except ThreeXUIError:
-        logger.exception("3x-ui error while redeeming promo (button) for tg_id=%s", callback.from_user.id)
+    except VpnProviderError:
+        logger.exception("VPN provider error while redeeming promo (button) for tg_id=%s", callback.from_user.id)
         await callback.answer(
             "Промокод принят, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку.",
             show_alert=True,
@@ -350,9 +350,9 @@ async def _grant_subscription(session, tg_id: int, username: str | None, plan_co
     base = sub.expires_at if (sub and sub.expires_at > now) else now
     new_expire = base + dt.timedelta(days=days)
 
-    xui_result = await threexui_client.ensure_client(user.tg_id, new_expire)
-    subscription_url = xui_result.get("subscription_url")
-    await set_xui_client_uuid(session, user, xui_result["uuid"])
+    vpn_result = await vpn_client.ensure_client(user.tg_id, new_expire)
+    subscription_url = vpn_result.get("subscription_url")
+    await set_vpn_client_uuid(session, user, vpn_result["uuid"])
 
     await upsert_subscription(
         session,
@@ -389,8 +389,8 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 )
                 if discount > 0:
                     await consume_discount_use(session, user)
-        except ThreeXUIError:
-            logger.exception("3x-ui error while granting free subscription for tg_id=%s", callback.from_user.id)
+        except VpnProviderError:
+            logger.exception("VPN provider error while granting free subscription for tg_id=%s", callback.from_user.id)
             await callback.answer(
                 "Не удалось выдать доступ: ошибка связи с VPN-панелью. Попробуйте позже или напишите в поддержку.",
                 show_alert=True,
@@ -424,8 +424,8 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 subscription_url = await _grant_subscription(
                     session, callback.from_user.id, callback.from_user.username, plan_code, plan["days"]
                 )
-            except ThreeXUIError:
-                logger.exception("3x-ui error while granting balance subscription for tg_id=%s", callback.from_user.id)
+            except VpnProviderError:
+                logger.exception("VPN provider error while granting balance subscription for tg_id=%s", callback.from_user.id)
                 await adjust_balance(session, user, price_rub)  # откатываем списание
                 await callback.answer(
                     "Не удалось выдать доступ: ошибка связи с VPN-панелью. Средства не списаны, попробуйте позже.",
@@ -537,7 +537,7 @@ async def check_payment(callback: CallbackQuery) -> None:
             await callback.answer()
             return
 
-        # оплата подтверждена -> продлеваем/создаём клиента в 3x-ui
+        # оплата подтверждена -> продлеваем/создаём клиента у VPN-провайдера
         plan = next((p for p in PLANS if p["code"] == local_invoice.plan_code), None)
         days = plan["days"] if plan else 30
 
@@ -545,8 +545,8 @@ async def check_payment(callback: CallbackQuery) -> None:
             subscription_url = await _grant_subscription(
                 session, callback.from_user.id, callback.from_user.username, local_invoice.plan_code, days
             )
-        except ThreeXUIError:
-            logger.exception("3x-ui error while granting paid subscription for tg_id=%s", callback.from_user.id)
+        except VpnProviderError:
+            logger.exception("VPN provider error while granting paid subscription for tg_id=%s", callback.from_user.id)
             await callback.answer(
                 "Оплата найдена, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку — доступ выдадим вручную.",
                 show_alert=True,

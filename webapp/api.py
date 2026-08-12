@@ -36,7 +36,7 @@ from database.db import (
 from handlers.user import _apply_discount, _grant_subscription, _redeem_promo_for_user
 from services.cryptobot_api import cryptopay_client
 from services.platega_api import platega_client
-from services.threexui_api import ThreeXUIError
+from services.vpn_provider import VpnProviderError
 from webapp.auth import extract_bearer_init_data, extract_bearer_session_token, validate_init_data
 
 logger = logging.getLogger(__name__)
@@ -197,8 +197,8 @@ async def redeem_promo(request: web.Request) -> web.Response:
         text = await _redeem_promo_for_user(tg_user["id"], tg_user.get("username"), code)
     except PromoError as e:
         raise ApiError(str(e)) from e
-    except ThreeXUIError as e:
-        logger.exception("3x-ui error while redeeming promo (webapp) for tg_id=%s", tg_user["id"])
+    except VpnProviderError as e:
+        logger.exception("VPN provider error while redeeming promo (webapp) for tg_id=%s", tg_user["id"])
         raise ApiError("Промокод принят, но не удалось выдать доступ из-за ошибки VPN-панели", status=502) from e
 
     return web.json_response({"message": text})
@@ -266,7 +266,7 @@ async def purchase(request: web.Request) -> web.Response:
                 )
                 if discount > 0:
                     await consume_discount_use(session, user)
-            except ThreeXUIError as e:
+            except VpnProviderError as e:
                 raise ApiError("Не удалось выдать доступ: ошибка связи с VPN-панелью", status=502) from e
             return web.json_response({"status": "granted", "subscription_url": subscription_url})
 
@@ -278,7 +278,7 @@ async def purchase(request: web.Request) -> web.Response:
                 subscription_url = await _grant_subscription(
                     session, tg_user["id"], tg_user.get("username"), plan_code, plan["days"]
                 )
-            except ThreeXUIError as e:
+            except VpnProviderError as e:
                 await adjust_balance(session, user, price_rub)  # откатываем списание
                 raise ApiError(
                     "Не удалось выдать доступ: ошибка связи с VPN-панелью. Средства не списаны", status=502
@@ -374,7 +374,7 @@ async def invoice_status(request: web.Request) -> web.Response:
             subscription_url = await _grant_subscription(
                 session, tg_user["id"], tg_user.get("username"), local_invoice.plan_code, days
             )
-        except ThreeXUIError as e:
+        except VpnProviderError as e:
             raise ApiError(
                 "Оплата найдена, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку",
                 status=502,

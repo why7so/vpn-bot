@@ -14,7 +14,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
-    xui_client_uuid: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Идентификатор клиента у VPN-провайдера (раньше — uuid клиента в 3x-ui,
+    # теперь — заглушка/будущий мастер-сервер). Имя колонки в БД оставлено
+    # как есть ради совместимости с уже существующими базами.
+    vpn_client_uuid: Mapped[str | None] = mapped_column("xui_client_uuid", String, nullable=True)
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     discount_percent: Mapped[float] = mapped_column(Float, default=0.0)
     discount_uses_left: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = безлимит до истечения срока
