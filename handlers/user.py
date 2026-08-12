@@ -459,6 +459,8 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 amount_rub=price_rub,
                 comment=f"{config.vpn_name}: подписка {plan['title']}",
                 order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
+                user_id=user.tg_id,
+                username=callback.from_user.username,
             )
             await create_invoice(
                 session,

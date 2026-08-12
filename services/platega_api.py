@@ -70,6 +70,8 @@ class PlategaClient:
         order_id: str | None = None,
         return_url: str | None = None,
         failed_url: str | None = None,
+        user_id: int | str | None = None,
+        username: str | None = None,
     ) -> dict:
         payload = {
             "paymentMethod": SBP_QR_METHOD,
@@ -82,6 +84,15 @@ class PlategaClient:
             payload["failedUrl"] = failed_url
         if order_id:
             payload["payload"] = order_id
+        if user_id is not None or username:
+            # Не используется API напрямую, но помогает быстро найти платёж
+            # в личном кабинете Platega по конкретному пользователю бота.
+            metadata = {}
+            if user_id is not None:
+                metadata["userId"] = str(user_id)
+            if username:
+                metadata["userName"] = f"@{username}" if not username.startswith("@") else username
+            payload["metadata"] = metadata
 
         async with aiohttp.ClientSession() as session:
             async with session.post(

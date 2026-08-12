@@ -221,6 +221,8 @@ async def topup(request: web.Request) -> web.Response:
             amount_rub=amount,
             comment=f"{config.vpn_name}: пополнение баланса",
             order_id=f"topup-user{user.tg_id}-{int(dt.datetime.utcnow().timestamp())}",
+            user_id=user.tg_id,
+            username=tg_user.get("username"),
         )
         await create_invoice(
             session,
@@ -294,6 +296,8 @@ async def purchase(request: web.Request) -> web.Response:
                 amount_rub=price_rub,
                 comment=f"{config.vpn_name}: подписка {plan['title']}",
                 order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
+                user_id=user.tg_id,
+                username=tg_user.get("username"),
             )
             await create_invoice(
                 session,
