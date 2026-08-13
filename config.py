@@ -44,6 +44,18 @@ class Config:
     support_username: str = os.getenv("SUPPORT_USERNAME", "")
     vpn_name: str = os.getenv("VPN_NAME", "Unnamed VPN")
 
+    # Кастомные эмодзи-иконки на кнопках (Bot API 9.4, icon_custom_emoji_id).
+    # Работает, только если у владельца бота есть Telegram Premium (или бот
+    # купил доп. юзернейм на Fragment) — иначе Telegram просто покажет кнопку
+    # без иконки. ID эмодзи можно получить, переслав боту сообщение с нужным
+    # премиум-эмодзи — админ-команда /getemojiid в handlers/admin.py вернёт ID.
+    # Пусто по умолчанию — кнопки рендерятся как обычно, без иконок.
+    icon_emoji_buy: str = os.getenv("ICON_EMOJI_BUY", "") or None
+    icon_emoji_account: str = os.getenv("ICON_EMOJI_ACCOUNT", "") or None
+    icon_emoji_connect_device: str = os.getenv("ICON_EMOJI_CONNECT_DEVICE", "") or None
+    icon_emoji_about: str = os.getenv("ICON_EMOJI_ABOUT", "") or None
+    icon_emoji_support: str = os.getenv("ICON_EMOJI_SUPPORT", "") or None
+
     # --- Telegram Mini App (WebApp) ---
     # URL фронтенда мини-приложения (Vercel/Netlify), напр. https://myvpn.vercel.app
     # Если задан — в меню бота появится кнопка запуска.

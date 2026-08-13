@@ -10,14 +10,43 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     # Тарифы/цены и оплата — бот-нативный флоу (см. handlers/user.py: "buy" ->
     # plans_kb -> payment_method_kb), работает всегда, даже если WEBAPP_URL
     # не настроен (в отличие от кнопок веб-приложения ниже).
-    rows.append([InlineKeyboardButton(text="Тарифы и оплата", callback_data="buy", style="Success")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Тарифы и оплата",
+                callback_data="buy",
+                style="success",
+                icon_custom_emoji_id=config.icon_emoji_buy,
+            )
+        ]
+    )
     if config.webapp_url:
         base = config.webapp_url.rstrip("/")
-        rows.append([InlineKeyboardButton(text="Личный кабинет", web_app=WebAppInfo(url=base), style="Success")])
-        rows.append([InlineKeyboardButton(text="Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Личный кабинет",
+                    web_app=WebAppInfo(url=base),
+                    style="success",
+                    icon_custom_emoji_id=config.icon_emoji_account,
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Подключить устройство",
+                    web_app=WebAppInfo(url=f"{base}#connect-device"),
+                    style="danger",
+                    icon_custom_emoji_id=config.icon_emoji_connect_device,
+                )
+            ]
+        )
     # "О сервисе" — подменю с поддержкой, соглашением и политикой
     # конфиденциальности (см. about_kb).
-    rows.append([InlineKeyboardButton(text="О сервисе", callback_data="about")])
+    rows.append(
+        [InlineKeyboardButton(text="О сервисе", callback_data="about", icon_custom_emoji_id=config.icon_emoji_about)]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -28,9 +57,17 @@ def about_kb() -> InlineKeyboardMarkup:
     # ссылки показываем заглушку с подсказкой администратору настроить его.
     if config.support_username:
         support_url = f"https://t.me/{config.support_username.lstrip('@')}"
-        rows.append([InlineKeyboardButton(text="Поддержка", url=support_url)])
+        rows.append(
+            [InlineKeyboardButton(text="Поддержка", url=support_url, icon_custom_emoji_id=config.icon_emoji_support)]
+        )
     else:
-        rows.append([InlineKeyboardButton(text="Поддержка", callback_data="support_stub")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Поддержка", callback_data="support_stub", icon_custom_emoji_id=config.icon_emoji_support
+                )
+            ]
+        )
     # Пользовательское соглашение и политика конфиденциальности отдаются
     # как статические страницы веб-приложения (см. webapp-frontend/terms.html,
     # privacy.html) — ссылки доступны только если настроен WEBAPP_URL.
@@ -53,7 +90,7 @@ def promo_result_kb(popup_text: str) -> InlineKeyboardMarkup:
     url = f"{base}?promo_popup={urllib.parse.quote(popup_text)}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=url), style="Success")],
+            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=url), style="success")],
         ]
     )
 

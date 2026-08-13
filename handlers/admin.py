@@ -121,6 +121,50 @@ async def stats(message: Message) -> None:
     )
 
 
+@router.message(Command("getemojiid"))
+async def get_emoji_id(message: Message) -> None:
+    """Dev-утилита: перешлите/отправьте боту сообщение с премиум-эмодзи после
+    команды /getemojiid — бот вернёт custom_emoji_id, который можно вписать
+    в .env (ICON_EMOJI_BUY и т.п.) для иконок на кнопках. Работает, только
+    если у вас есть Telegram Premium — иначе эмодзи в сообщении останется
+    обычным, без custom_emoji entity."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    entities = message.entities or []
+    custom_emoji_ids = [e.custom_emoji_id for e in entities if e.type == "custom_emoji"]
+
+    if not custom_emoji_ids:
+        await message.answer(
+            "В этом сообщении нет кастомного эмодзи.\n\n"
+            "Отправьте команду /getemojiid, а сразу следом (или в том же сообщении, "
+            "если это позволяет клиент) — премиум-эмодзи. Нужен Telegram Premium, "
+            "иначе Telegram присылает обычный unicode-эмодзи без ID."
+        )
+        return
+
+    lines = [f"<code>{eid}</code>" for eid in custom_emoji_ids]
+    await message.answer("Custom emoji ID:\n" + "\n".join(lines))
+
+
+def _has_custom_emoji(message: Message) -> bool:
+    """Фильтр, а не F.entities: последний матчит ЛЮБЫЕ сущности, включая
+    bot_command, и перехватил бы остальные /admin-команды ниже по роутеру."""
+    return any(e.type == "custom_emoji" for e in (message.entities or []))
+
+
+@router.message(_has_custom_emoji)
+async def get_emoji_id_reply(message: Message) -> None:
+    """Второй шаг /getemojiid: если клиент не позволяет вставить эмодзи в ту
+    же команду, админ может просто прислать сообщение с премиум-эмодзи
+    следующим — бот всё равно вернёт ID."""
+    if not _is_admin(message.from_user.id):
+        return
+    custom_emoji_ids = [e.custom_emoji_id for e in (message.entities or []) if e.type == "custom_emoji"]
+    lines = [f"<code>{eid}</code>" for eid in custom_emoji_ids]
+    await message.answer("Custom emoji ID:\n" + "\n".join(lines))
+
+
 @router.message(Command("promo_create"))
 async def promo_create(message: Message, bot: Bot) -> None:
     if not _is_admin(message.from_user.id):
