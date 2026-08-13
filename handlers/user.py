@@ -29,6 +29,7 @@ from database.db import (
     upsert_subscription,
 )
 from keyboards.keyboards import (
+    about_kb,
     back_main_kb,
     device_payment_method_kb,
     devices_kb,
@@ -184,6 +185,13 @@ async def back_main(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "about")
+async def about_menu(callback: CallbackQuery) -> None:
+    """Подменю "О сервисе": поддержка, соглашение, политика конфиденциальности."""
+    await callback.message.edit_text(f"ℹ️ {config.vpn_name}", reply_markup=about_kb())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "support_stub")
 async def support_stub(callback: CallbackQuery) -> None:
     """Заглушка на случай, если SUPPORT_USERNAME не задан в .env — чтобы
@@ -208,7 +216,7 @@ async def connect_device(callback: CallbackQuery) -> None:
         user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
 
     if sub is None or not sub.subscription_url:
-        text = "У вас пока нет активной подписки — сначала оформите её через «Продлить подписку»."
+        text = "У вас пока нет активной подписки — сначала оформите её через «Тарифы и оплата»."
     else:
         limit = effective_device_limit(user)
         limit_line = "без ограничений" if limit <= 0 else f"до {limit} устройств одновременно"
@@ -219,7 +227,7 @@ async def connect_device(callback: CallbackQuery) -> None:
             "Hiddify (Windows/macOS/Linux/Android/iOS)\n"
             "2. В клиенте выберите «Добавить по ссылке-подписке» и вставьте ссылку выше\n"
             "3. Обновите список серверов и подключайтесь\n\n"
-            f"📦 Лимит устройств: {limit_line}. Нужно больше — «Докупить устройства» в главном меню."
+            f"📦 Лимит устройств: {limit_line}."
         )
 
     await callback.message.edit_text(text, reply_markup=back_main_kb())
