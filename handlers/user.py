@@ -95,7 +95,7 @@ async def _issue_browser_login_link(user_id: int, username: str | None) -> tuple
 
 def _browser_login_kb(login_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🌐 Открыть в браузере", url=login_url)]]
+        inline_keyboard=[[InlineKeyboardButton(text="Открыть в браузере", url=login_url)]]
     )
 
 
@@ -182,6 +182,16 @@ async def back_main(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(_profile_text(user, sub), reply_markup=main_menu_kb())
     await callback.answer()
+
+
+@router.callback_query(F.data == "support_stub")
+async def support_stub(callback: CallbackQuery) -> None:
+    """Заглушка на случай, если SUPPORT_USERNAME не задан в .env — чтобы
+    кнопка поддержки в меню не пропадала молча, а объясняла, что делать."""
+    await callback.answer(
+        "Тех.поддержка пока не настроена. Администратору: задайте SUPPORT_USERNAME в .env.",
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data == "buy")

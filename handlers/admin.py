@@ -80,7 +80,7 @@ def _promo_button_kb(bot_username: str, code: str) -> InlineKeyboardMarkup:
     else:
         url = f"https://t.me/{bot_username}?start=promo_{code}"
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🎁 Активировать", url=url)]]
+        inline_keyboard=[[InlineKeyboardButton(text="Активировать", url=url)]]
     )
 
 

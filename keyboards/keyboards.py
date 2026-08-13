@@ -7,14 +7,25 @@ from config import DEVICE_QTY_PRESETS, config
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = []
+    # Тарифы/цены и оплата — бот-нативный флоу (см. handlers/user.py: "buy" ->
+    # plans_kb -> payment_method_kb), работает всегда, даже если WEBAPP_URL
+    # не настроен (в отличие от кнопок веб-приложения ниже).
+    rows.append([InlineKeyboardButton(text="Тарифы и оплата", callback_data="buy", style="Success")])
     if config.webapp_url:
         base = config.webapp_url.rstrip("/")
-        rows.append([InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base), style="Success")])
-        rows.append([InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")])
-        rows.append([InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")])
+        rows.append([InlineKeyboardButton(text="Личный кабинет", web_app=WebAppInfo(url=base), style="Success")])
+        rows.append([InlineKeyboardButton(text="Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")])
+        rows.append([InlineKeyboardButton(text="Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")])
     # Доп. услуга "Докупить устройства" — работает как бот-нативный флоу,
     # не завязана на настроенный WEBAPP_URL.
-    rows.append([InlineKeyboardButton(text="📦 Докупить устройства", callback_data="devices")])
+    rows.append([InlineKeyboardButton(text="Докупить устройства", callback_data="devices")])
+    # Контакт тех. поддержки. Если SUPPORT_USERNAME не задан в .env — вместо
+    # ссылки показываем заглушку с подсказкой администратору настроить его.
+    if config.support_username:
+        support_url = f"https://t.me/{config.support_username.lstrip('@')}"
+        rows.append([InlineKeyboardButton(text="Поддержка", url=support_url)])
+    else:
+        rows.append([InlineKeyboardButton(text="Поддержка", callback_data="support_stub")])
     # Пользовательское соглашение и политика конфиденциальности отдаются
     # как статические страницы веб-приложения (см. webapp-frontend/terms.html,
     # privacy.html) — ссылки доступны только если настроен WEBAPP_URL.
@@ -22,8 +33,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         base = config.webapp_url.rstrip("/")
         rows.append(
             [
-                InlineKeyboardButton(text="📄 Соглашение", url=f"{base}/terms"),
-                InlineKeyboardButton(text="🔒 Конфиденциальность", url=f"{base}/privacy"),
+                InlineKeyboardButton(text="Соглашение", url=f"{base}/terms"),
+                InlineKeyboardButton(text="Конфиденциальность", url=f"{base}/privacy"),
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -40,14 +51,14 @@ def promo_result_kb(popup_text: str) -> InlineKeyboardMarkup:
     url = f"{base}?promo_popup={urllib.parse.quote(popup_text)}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=url), style="Success")],
+            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=url), style="Success")],
         ]
     )
 
 
 def back_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]]
+        inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data="back_main")]]
     )
 
 
@@ -64,7 +75,7 @@ def plans_kb(plans: list[dict]) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -77,32 +88,32 @@ def payment_method_kb(
     rows = []
     if is_free:
         rows.append(
-            [InlineKeyboardButton(text="🎁 Активировать бесплатно", callback_data=f"paymethod:{plan_code}:free")]
+            [InlineKeyboardButton(text="Активировать бесплатно", callback_data=f"paymethod:{plan_code}:free")]
         )
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")])
+        rows.append([InlineKeyboardButton(text="Назад", callback_data="buy")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     if balance_enough:
         rows.append(
-            [InlineKeyboardButton(text=f"💰 Оплатить с баланса ({balance_label})", callback_data=f"paymethod:{plan_code}:balance")]
+            [InlineKeyboardButton(text=f"Оплатить с баланса ({balance_label})", callback_data=f"paymethod:{plan_code}:balance")]
         )
     rows.append(
-        [InlineKeyboardButton(text="💎 Крипта (CryptoBot)", callback_data=f"paymethod:{plan_code}:cryptobot")]
+        [InlineKeyboardButton(text="Крипта (CryptoBot)", callback_data=f"paymethod:{plan_code}:cryptobot")]
     )
     rows.append(
-        [InlineKeyboardButton(text="💳 СБП (Platega)", callback_data=f"paymethod:{plan_code}:platega")]
+        [InlineKeyboardButton(text="СБП (Platega)", callback_data=f"paymethod:{plan_code}:platega")]
     )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="buy")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def invoice_kb(pay_url: str, invoice_id: str, provider: str = "cryptobot", back_callback: str = "buy") -> InlineKeyboardMarkup:
-    label = "💳 Оплатить в CryptoBot" if provider == "cryptobot" else "💳 Оплатить через СБП"
+    label = "Оплатить в CryptoBot" if provider == "cryptobot" else "Оплатить через СБП"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, url=pay_url)],
-            [InlineKeyboardButton(text="✅ Я оплатил, проверить", callback_data=f"check:{invoice_id}")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
+            [InlineKeyboardButton(text="Я оплатил, проверить", callback_data=f"check:{invoice_id}")],
+            [InlineKeyboardButton(text="Назад", callback_data=back_callback)],
         ]
     )
 
@@ -131,7 +142,7 @@ def devices_kb() -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -139,13 +150,13 @@ def device_payment_method_kb(qty: int, balance_enough: bool, balance_label: str)
     rows = []
     if balance_enough:
         rows.append(
-            [InlineKeyboardButton(text=f"💰 Оплатить с баланса ({balance_label})", callback_data=f"devpay:{qty}:balance")]
+            [InlineKeyboardButton(text=f"Оплатить с баланса ({balance_label})", callback_data=f"devpay:{qty}:balance")]
         )
     rows.append(
-        [InlineKeyboardButton(text="💎 Крипта (CryptoBot)", callback_data=f"devpay:{qty}:cryptobot")]
+        [InlineKeyboardButton(text="Крипта (CryptoBot)", callback_data=f"devpay:{qty}:cryptobot")]
     )
     rows.append(
-        [InlineKeyboardButton(text="💳 СБП (Platega)", callback_data=f"devpay:{qty}:platega")]
+        [InlineKeyboardButton(text="СБП (Platega)", callback_data=f"devpay:{qty}:platega")]
     )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="devices")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="devices")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
