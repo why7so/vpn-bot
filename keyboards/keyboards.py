@@ -45,7 +45,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     # "О сервисе" — подменю с поддержкой, соглашением и политикой
     # конфиденциальности (см. about_kb).
     rows.append(
-        [InlineKeyboardButton(text="О сервисе", callback_data="about", icon_custom_emoji_id=config.icon_emoji_about)]
+        [InlineKeyboardButton(text="О сервисе", callback_data="about", icon_custom_emoji_id=6028435952299413210)]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
