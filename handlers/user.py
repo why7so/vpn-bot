@@ -5,17 +5,21 @@ from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from config import PLANS, config
+from config import DEVICE_QTY_PRESETS, config
 from database.db import (
     PromoError,
+    add_extra_devices,
     adjust_balance,
     async_session,
     consume_discount_use,
     create_invoice,
     create_login_token,
+    effective_device_limit,
     get_effective_discount,
     get_invoice_by_invoice_id,
     get_or_create_user,
+    get_plan,
+    get_plans,
     get_subscription,
     mark_invoice_paid,
     redeem_promo_code,
@@ -26,6 +30,8 @@ from database.db import (
 )
 from keyboards.keyboards import (
     back_main_kb,
+    device_payment_method_kb,
+    devices_kb,
     invoice_kb,
     main_menu_kb,
     payment_method_kb,
@@ -180,7 +186,9 @@ async def back_main(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "buy")
 async def show_plans(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("Выберите тарифный план:", reply_markup=plans_kb())
+    async with async_session() as session:
+        plans = await get_plans(session)
+    await callback.message.edit_text("Выберите тарифный план:", reply_markup=plans_kb(plans))
     await callback.answer()
 
 
@@ -192,13 +200,16 @@ async def connect_device(callback: CallbackQuery) -> None:
     if sub is None or not sub.subscription_url:
         text = "У вас пока нет активной подписки — сначала оформите её через «Продлить подписку»."
     else:
+        limit = effective_device_limit(user)
+        limit_line = "без ограничений" if limit <= 0 else f"до {limit} устройств одновременно"
         text = (
             "📱 <b>Подключение устройства</b>\n\n"
             f"Ссылка-подписка:\n<code>{sub.subscription_url}</code>\n\n"
             "1. Установите клиент: V2rayNG (Android), Streisand / Shadowrocket (iOS), "
             "Hiddify (Windows/macOS/Linux/Android/iOS)\n"
             "2. В клиенте выберите «Добавить по ссылке-подписке» и вставьте ссылку выше\n"
-            "3. Обновите список серверов и подключайтесь"
+            "3. Обновите список серверов и подключайтесь\n\n"
+            f"📦 Лимит устройств: {limit_line}. Нужно больше — «Докупить устройства» в главном меню."
         )
 
     await callback.message.edit_text(text, reply_markup=back_main_kb())
@@ -321,12 +332,12 @@ def _apply_discount(plan: dict, discount_percent: float) -> tuple[float, float]:
 @router.callback_query(F.data.startswith("plan:"))
 async def choose_plan(callback: CallbackQuery) -> None:
     plan_code = callback.data.split(":", 1)[1]
-    plan = next((p for p in PLANS if p["code"] == plan_code), None)
-    if plan is None:
-        await callback.answer("Такого плана не существует", show_alert=True)
-        return
 
     async with async_session() as session:
+        plan = await get_plan(session, plan_code)
+        if plan is None:
+            await callback.answer("Такого плана не существует", show_alert=True)
+            return
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         discount = await get_effective_discount(session, user)
 
@@ -358,7 +369,7 @@ async def _grant_subscription(session, tg_id: int, username: str | None, plan_co
     base = sub.expires_at if (sub and sub.expires_at > now) else now
     new_expire = base + dt.timedelta(days=days)
 
-    vpn_result = await vpn_client.ensure_client(user.tg_id, new_expire)
+    vpn_result = await vpn_client.ensure_client(user.tg_id, new_expire, device_limit=effective_device_limit(user))
     subscription_url = vpn_result.get("subscription_url")
     await set_vpn_client_uuid(session, user, vpn_result["uuid"])
 
@@ -372,15 +383,168 @@ async def _grant_subscription(session, tg_id: int, username: str | None, plan_co
     return subscription_url
 
 
-@router.callback_query(F.data.startswith("paymethod:"))
-async def choose_payment_method(callback: CallbackQuery) -> None:
-    _, plan_code, provider = callback.data.split(":", 2)
-    plan = next((p for p in PLANS if p["code"] == plan_code), None)
-    if plan is None:
-        await callback.answer("Такого плана не существует", show_alert=True)
+def _extra_device_price(qty: int) -> tuple[float, float]:
+    """Возвращает (price_usdt, price_rub) за qty дополнительных устройств."""
+    price_usdt = round(config.extra_device_price_usdt * qty, 2)
+    price_rub = round(config.extra_device_price_rub * qty)
+    return price_usdt, price_rub
+
+
+@router.callback_query(F.data == "devices")
+async def show_devices(callback: CallbackQuery) -> None:
+    async with async_session() as session:
+        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+
+    limit = effective_device_limit(user)
+    limit_line = "без ограничений" if limit <= 0 else f"{limit} устройств"
+    text = (
+        "📦 <b>Докупить устройства</b>\n\n"
+        f"Текущий лимит: {limit_line} (базовый лимит: {config.device_limit}, "
+        f"докуплено: {user.extra_devices}).\n\n"
+        "Дополнительное устройство действует бессрочно, пока активна подписка.\n"
+        "Выберите количество:"
+    )
+    await callback.message.edit_text(text, reply_markup=devices_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("devqty:"))
+async def choose_device_qty(callback: CallbackQuery) -> None:
+    try:
+        qty = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("Некорректное количество", show_alert=True)
+        return
+    if qty not in DEVICE_QTY_PRESETS:
+        await callback.answer("Некорректное количество", show_alert=True)
         return
 
     async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+
+    price_usdt, price_rub = _extra_device_price(qty)
+    balance_enough = user.balance >= price_rub
+
+    await callback.message.edit_text(
+        f"Дополнительно устройств: {qty}\n"
+        f"Крипта: {price_usdt} USDT · Рубли: {price_rub}₽\n"
+        f"Ваш баланс: {user.balance:.0f} ₽\n\n"
+        "Выберите способ оплаты:",
+        reply_markup=device_payment_method_kb(qty, balance_enough, f"{price_rub}₽"),
+    )
+    await callback.answer()
+
+
+async def _grant_extra_devices(session, tg_id: int, username: str | None, qty: int) -> int:
+    """Начисляет qty доп. устройств и пытается сразу применить новый лимит
+    у VPN-провайдера (best-effort — ошибка тут не должна ронять покупку,
+    т.к. деньги уже списаны/оплачены; лимит всё равно подтянется при
+    следующем продлении подписки через _grant_subscription)."""
+    user = await get_or_create_user(session, tg_id, username)
+    user = await add_extra_devices(session, user, qty)
+    new_limit = effective_device_limit(user)
+    try:
+        await vpn_client.update_device_limit(user.tg_id, new_limit)
+    except Exception:
+        logger.exception("Не удалось применить новый лимит устройств сразу для tg_id=%s", tg_id)
+    return new_limit
+
+
+@router.callback_query(F.data.startswith("devpay:"))
+async def choose_device_payment(callback: CallbackQuery) -> None:
+    _, qty_raw, provider = callback.data.split(":", 2)
+    try:
+        qty = int(qty_raw)
+    except ValueError:
+        await callback.answer("Некорректное количество", show_alert=True)
+        return
+    if qty not in DEVICE_QTY_PRESETS or provider not in ("balance", "cryptobot", "platega"):
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+
+    price_usdt, price_rub = _extra_device_price(qty)
+
+    if provider == "balance":
+        async with async_session() as session:
+            user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+            if user.balance < price_rub:
+                await callback.answer("Недостаточно средств на балансе", show_alert=True)
+                return
+            await adjust_balance(session, user, -price_rub)
+            new_limit = await _grant_extra_devices(session, callback.from_user.id, callback.from_user.username, qty)
+
+        await callback.message.edit_text(
+            f"✅ Оплата с баланса прошла успешно!\nДобавлено устройств: {qty}\n"
+            f"Текущий лимит устройств: {new_limit}",
+            reply_markup=main_menu_kb(),
+        )
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+
+        if provider == "platega":
+            try:
+                invoice = await platega_client.create_invoice(
+                    amount_rub=price_rub,
+                    comment=f"{config.vpn_name}: +{qty} устройств",
+                    order_id=f"devices-user{user.tg_id}-{qty}-{int(dt.datetime.utcnow().timestamp())}",
+                    user_id=user.tg_id,
+                    username=callback.from_user.username,
+                )
+            except PlategaError:
+                logger.exception("Platega error while creating devices invoice for tg_id=%s", user.tg_id)
+                await callback.answer("Не удалось создать счёт на оплату. Попробуйте позже.", show_alert=True)
+                return
+            await create_invoice(
+                session,
+                user_id=user.id,
+                invoice_id=str(invoice["invoice_id"]),
+                pay_url=invoice["pay_url"],
+                amount=price_rub,
+                purpose="devices",
+                provider="platega",
+                currency="RUB",
+                quantity=qty,
+            )
+            amount_text = f"{price_rub} ₽"
+        else:
+            invoice = await cryptopay_client.create_invoice(
+                amount_usdt=price_usdt,
+                description=f"{config.vpn_name}: +{qty} устройств",
+                payload=f"user:{user.tg_id}:devices:{qty}",
+            )
+            await create_invoice(
+                session,
+                user_id=user.id,
+                invoice_id=str(invoice["invoice_id"]),
+                pay_url=invoice["pay_url"],
+                amount=price_usdt,
+                purpose="devices",
+                provider="cryptobot",
+                currency="USDT",
+                quantity=qty,
+            )
+            amount_text = f"{price_usdt} USDT"
+
+    await callback.message.edit_text(
+        f"Дополнительно устройств: {qty}\nСумма: {amount_text}\n\n"
+        "Нажмите «Оплатить», после оплаты вернитесь и нажмите «Я оплатил».",
+        reply_markup=invoice_kb(invoice["pay_url"], str(invoice["invoice_id"]), provider=provider, back_callback="devices"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("paymethod:"))
+async def choose_payment_method(callback: CallbackQuery) -> None:
+    _, plan_code, provider = callback.data.split(":", 2)
+
+    async with async_session() as session:
+        plan = await get_plan(session, plan_code)
+        if plan is None:
+            await callback.answer("Такого плана не существует", show_alert=True)
+            return
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         discount = await get_effective_discount(session, user)
     price_usdt, price_rub = _apply_discount(plan, discount)
@@ -554,8 +718,24 @@ async def check_payment(callback: CallbackQuery) -> None:
             await callback.answer()
             return
 
+        if local_invoice.purpose == "devices":
+            new_limit = await _grant_extra_devices(
+                session, callback.from_user.id, callback.from_user.username, local_invoice.quantity or 0
+            )
+            await mark_invoice_paid(session, local_invoice)
+
+            await callback.message.edit_text(
+                f"✅ Оплата подтверждена!\nДобавлено устройств: {local_invoice.quantity}\n"
+                f"Текущий лимит устройств: {new_limit}",
+                reply_markup=main_menu_kb(),
+            )
+            await callback.answer()
+            return
+
         # оплата подтверждена -> продлеваем/создаём клиента у VPN-провайдера
-        plan = next((p for p in PLANS if p["code"] == local_invoice.plan_code), None)
+        # include_disabled=True: тариф уже оплачен раньше, доступ выдаём в любом
+        # случае, даже если админ отключил его после создания счёта.
+        plan = await get_plan(session, local_invoice.plan_code, include_disabled=True)
         days = plan["days"] if plan else 30
 
         try:

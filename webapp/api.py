@@ -17,18 +17,22 @@ import logging
 
 from aiohttp import web
 
-from config import PLANS, TOPUP_PRESETS_RUB, config
+from config import DEVICE_QTY_PRESETS, TOPUP_PRESETS_RUB, config
 from database.db import (
     PromoError,
+    add_extra_devices,
     adjust_balance,
     async_session,
     consume_discount_use,
     create_invoice,
+    effective_device_limit,
     exchange_login_token,
     get_browser_session,
     get_effective_discount,
     get_invoice_by_invoice_id,
     get_or_create_user,
+    get_plan,
+    get_plans as list_plans,
     get_subscription,
     mark_invoice_paid,
     revoke_browser_session,
@@ -36,7 +40,7 @@ from database.db import (
 from handlers.user import _apply_discount, _grant_subscription, _redeem_promo_for_user
 from services.cryptobot_api import cryptopay_client
 from services.platega_api import PlategaError, platega_client
-from services.vpn_provider import VpnProviderError
+from services.vpn_provider import VpnProviderError, vpn_client
 from webapp.auth import extract_bearer_init_data, extract_bearer_session_token, validate_init_data
 
 logger = logging.getLogger(__name__)
@@ -106,6 +110,8 @@ def _profile_json(user, sub) -> dict:
 
 @routes.get("/api/plans")
 async def get_plans(request: web.Request) -> web.Response:
+    async with async_session() as session:
+        plans = await list_plans(session)  # только включённые, с учётом цен админа
     return web.json_response(
         {
             "plans": [
@@ -116,7 +122,7 @@ async def get_plans(request: web.Request) -> web.Response:
                     "price_usdt": p["price_usdt"],
                     "price_rub": p["price_rub"],
                 }
-                for p in PLANS
+                for p in plans
             ],
             "topup_presets_rub": TOPUP_PRESETS_RUB,
         }
@@ -196,13 +202,122 @@ async def get_me(request: web.Request) -> web.Response:
 
 @routes.get("/api/devices")
 async def get_devices(request: web.Request) -> web.Response:
-    await _tg_user_from_request(request)  # только проверяем авторизацию
+    tg_user = await _tg_user_from_request(request)
+    async with async_session() as session:
+        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
+        limit = effective_device_limit(user)
+
+    limit_line = "без ограничений" if limit <= 0 else f"максимум {limit} устройств одновременно"
     return web.json_response(
         {
+            "device_limit": limit,
+            "base_device_limit": config.device_limit,
+            "extra_devices": user.extra_devices,
+            "price_rub": config.extra_device_price_rub,
+            "price_usdt": config.extra_device_price_usdt,
+            "qty_presets": DEVICE_QTY_PRESETS,
             "message": (
-                "Ограничения на количество устройств нет — используйте одну и ту же "
-                "ссылку-подписку на всех своих устройствах одновременно."
+                f"У вас {limit_line} по одной ссылке-подписке. "
+                "Нужно больше — докупите устройства ниже."
+            ),
+        }
+    )
+
+
+async def _grant_extra_devices(session, tg_id: int, username: str | None, qty: int) -> int:
+    """Начисляет qty доп. устройств и пытается сразу применить новый лимит
+    у VPN-провайдера (best-effort — см. handlers/user.py:_grant_extra_devices)."""
+    user = await get_or_create_user(session, tg_id, username)
+    user = await add_extra_devices(session, user, qty)
+    new_limit = effective_device_limit(user)
+    try:
+        await vpn_client.update_device_limit(user.tg_id, new_limit)
+    except Exception:
+        logger.exception("Не удалось применить новый лимит устройств сразу для tg_id=%s", tg_id)
+    return new_limit
+
+
+@routes.post("/api/devices/purchase")
+async def purchase_devices(request: web.Request) -> web.Response:
+    """provider: balance | cryptobot | platega"""
+    tg_user = await _tg_user_from_request(request)
+    body = await request.json()
+    try:
+        qty = int(body.get("qty"))
+    except (TypeError, ValueError) as e:
+        raise ApiError("Некорректное количество устройств") from e
+    provider = body.get("provider")
+
+    if qty not in DEVICE_QTY_PRESETS:
+        raise ApiError("Некорректное количество устройств")
+    if provider not in ("balance", "cryptobot", "platega"):
+        raise ApiError("Некорректный способ оплаты")
+
+    price_usdt = round(config.extra_device_price_usdt * qty, 2)
+    price_rub = round(config.extra_device_price_rub * qty)
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
+
+        if provider == "balance":
+            if user.balance < price_rub:
+                raise ApiError("Недостаточно средств на балансе")
+            await adjust_balance(session, user, -price_rub)
+            new_limit = await _grant_extra_devices(session, tg_user["id"], tg_user.get("username"), qty)
+            return web.json_response({"status": "granted", "device_limit": new_limit})
+
+        # provider in (cryptobot, platega) -> выставляем счёт, начисление устройств — отдельным
+        # шагом через GET /api/invoice/{id} после оплаты
+        if provider == "platega":
+            try:
+                invoice = await platega_client.create_invoice(
+                    amount_rub=price_rub,
+                    comment=f"{config.vpn_name}: +{qty} устройств",
+                    order_id=f"devices-user{user.tg_id}-{qty}-{int(dt.datetime.utcnow().timestamp())}",
+                    user_id=user.tg_id,
+                    username=tg_user.get("username"),
+                )
+            except PlategaError as e:
+                logger.exception("Platega error while creating devices invoice for tg_id=%s", user.tg_id)
+                raise ApiError("Не удалось создать счёт на оплату. Попробуйте позже", status=502) from e
+            await create_invoice(
+                session,
+                user_id=user.id,
+                invoice_id=str(invoice["invoice_id"]),
+                pay_url=invoice["pay_url"],
+                amount=price_rub,
+                purpose="devices",
+                provider="platega",
+                currency="RUB",
+                quantity=qty,
             )
+            amount, currency = price_rub, "RUB"
+        else:
+            invoice = await cryptopay_client.create_invoice(
+                amount_usdt=price_usdt,
+                description=f"{config.vpn_name}: +{qty} устройств",
+                payload=f"user:{user.tg_id}:devices:{qty}",
+            )
+            await create_invoice(
+                session,
+                user_id=user.id,
+                invoice_id=str(invoice["invoice_id"]),
+                pay_url=invoice["pay_url"],
+                amount=price_usdt,
+                purpose="devices",
+                provider="cryptobot",
+                currency="USDT",
+                quantity=qty,
+            )
+            amount, currency = price_usdt, "USDT"
+
+    return web.json_response(
+        {
+            "status": "invoice",
+            "invoice_id": str(invoice["invoice_id"]),
+            "pay_url": invoice["pay_url"],
+            "amount": amount,
+            "currency": currency,
         }
     )
 
@@ -273,17 +388,28 @@ async def purchase(request: web.Request) -> web.Response:
     body = await request.json()
     plan_code = body.get("plan_code")
     provider = body.get("provider")
+    try:
+        extra_qty = int(body.get("extra_devices_qty") or 0)
+    except (TypeError, ValueError):
+        raise ApiError("Некорректное количество устройств")
 
-    plan = next((p for p in PLANS if p["code"] == plan_code), None)
-    if plan is None:
-        raise ApiError("Такого плана не существует")
     if provider not in ("free", "balance", "cryptobot", "platega"):
         raise ApiError("Некорректный способ оплаты")
+    if extra_qty < 0 or extra_qty > 50:
+        raise ApiError("Некорректное количество устройств")
 
     async with async_session() as session:
+        plan = await get_plan(session, plan_code)
+        if plan is None:
+            raise ApiError("Такого плана не существует")
         user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
         discount = await get_effective_discount(session, user)
         price_usdt, price_rub = _apply_discount(plan, discount)
+        # Доп. устройства не участвуют в скидке на тариф — цена за них фиксированная,
+        # как и при самостоятельной покупке через "Докупить устройства".
+        if extra_qty:
+            price_usdt = round(price_usdt + config.extra_device_price_usdt * extra_qty, 2)
+            price_rub = round(price_rub + config.extra_device_price_rub * extra_qty)
 
         if provider == "free":
             if price_rub > 0:
@@ -292,6 +418,8 @@ async def purchase(request: web.Request) -> web.Response:
                 subscription_url = await _grant_subscription(
                     session, tg_user["id"], tg_user.get("username"), plan_code, plan["days"]
                 )
+                if extra_qty:
+                    await _grant_extra_devices(session, tg_user["id"], tg_user.get("username"), extra_qty)
                 if discount > 0:
                     await consume_discount_use(session, user)
             except VpnProviderError as e:
@@ -306,6 +434,8 @@ async def purchase(request: web.Request) -> web.Response:
                 subscription_url = await _grant_subscription(
                     session, tg_user["id"], tg_user.get("username"), plan_code, plan["days"]
                 )
+                if extra_qty:
+                    await _grant_extra_devices(session, tg_user["id"], tg_user.get("username"), extra_qty)
             except VpnProviderError as e:
                 await adjust_balance(session, user, price_rub)  # откатываем списание
                 raise ApiError(
@@ -316,12 +446,14 @@ async def purchase(request: web.Request) -> web.Response:
             return web.json_response({"status": "granted", "subscription_url": subscription_url})
 
         # provider in (cryptobot, platega) -> выставляем счёт, оплата и выдача доступа — отдельным шагом
-        # через GET /api/invoice/{id} (аналог кнопки "Я оплатил" в боте)
+        # через GET /api/invoice/{id} (аналог кнопки "Я оплатил" в боте). Кол-во доп.
+        # устройств едет вместе со счётом в invoice.quantity и начисляется там же.
+        devices_comment = f" + {extra_qty} устройств" if extra_qty else ""
         if provider == "platega":
             try:
                 invoice = await platega_client.create_invoice(
                     amount_rub=price_rub,
-                    comment=f"{config.vpn_name}: подписка {plan['title']}",
+                    comment=f"{config.vpn_name}: подписка {plan['title']}{devices_comment}",
                     order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
                     user_id=user.tg_id,
                     username=tg_user.get("username"),
@@ -340,12 +472,13 @@ async def purchase(request: web.Request) -> web.Response:
                 provider="platega",
                 currency="RUB",
                 discount_percent=discount,
+                quantity=extra_qty or None,
             )
             amount, currency = price_rub, "RUB"
         else:
             invoice = await cryptopay_client.create_invoice(
                 amount_usdt=price_usdt,
-                description=f"{config.vpn_name}: подписка {plan['title']}",
+                description=f"{config.vpn_name}: подписка {plan['title']}{devices_comment}",
                 payload=f"user:{user.tg_id}:plan:{plan_code}",
             )
             await create_invoice(
@@ -359,6 +492,7 @@ async def purchase(request: web.Request) -> web.Response:
                 provider="cryptobot",
                 currency="USDT",
                 discount_percent=discount,
+                quantity=extra_qty or None,
             )
             amount, currency = price_usdt, "USDT"
 
@@ -402,12 +536,23 @@ async def invoice_status(request: web.Request) -> web.Response:
             await mark_invoice_paid(session, local_invoice)
             return web.json_response({"status": "paid", "balance": user.balance})
 
-        plan = next((p for p in PLANS if p["code"] == local_invoice.plan_code), None)
+        if local_invoice.purpose == "devices":
+            new_limit = await _grant_extra_devices(
+                session, tg_user["id"], tg_user.get("username"), local_invoice.quantity or 0
+            )
+            await mark_invoice_paid(session, local_invoice)
+            return web.json_response({"status": "paid", "device_limit": new_limit})
+
+        # include_disabled=True: тариф уже оплачен раньше, доступ выдаём в любом
+        # случае, даже если админ отключил его после создания счёта.
+        plan = await get_plan(session, local_invoice.plan_code, include_disabled=True)
         days = plan["days"] if plan else 30
         try:
             subscription_url = await _grant_subscription(
                 session, tg_user["id"], tg_user.get("username"), local_invoice.plan_code, days
             )
+            if local_invoice.quantity:
+                await _grant_extra_devices(session, tg_user["id"], tg_user.get("username"), local_invoice.quantity)
         except VpnProviderError as e:
             raise ApiError(
                 "Оплата найдена, но не удалось выдать доступ из-за ошибки VPN-панели. Напишите в поддержку",

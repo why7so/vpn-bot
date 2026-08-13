@@ -2,23 +2,20 @@ import urllib.parse
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from config import PLANS, config
+from config import DEVICE_QTY_PRESETS, config
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
-    if not config.webapp_url:
-        # Без настроенного webapp_url кнопки некуда открывать — отдаём пустую клавиатуру,
-        # чтобы не показывать пользователю нерабочие кнопки.
-        return InlineKeyboardMarkup(inline_keyboard=[])
-
-    base = config.webapp_url.rstrip("/")
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base), style="Success")],
-            [InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")],
-            [InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")],
-        ]
-    )
+    rows = []
+    if config.webapp_url:
+        base = config.webapp_url.rstrip("/")
+        rows.append([InlineKeyboardButton(text="🚀 Личный кабинет", web_app=WebAppInfo(url=base), style="Success")])
+        rows.append([InlineKeyboardButton(text="🛒 Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")])
+        rows.append([InlineKeyboardButton(text="📱 Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")])
+    # Доп. услуга "Докупить устройства" — работает как бот-нативный флоу,
+    # не завязана на настроенный WEBAPP_URL.
+    rows.append([InlineKeyboardButton(text="📦 Докупить устройства", callback_data="devices")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def promo_result_kb(popup_text: str) -> InlineKeyboardMarkup:
@@ -43,9 +40,11 @@ def back_main_kb() -> InlineKeyboardMarkup:
     )
 
 
-def plans_kb() -> InlineKeyboardMarkup:
+def plans_kb(plans: list[dict]) -> InlineKeyboardMarkup:
+    """plans — список тарифов (уже отфильтрованных по enabled и с ценами
+    с учётом переопределений), см. database.db.get_plans."""
     rows = []
-    for plan in PLANS:
+    for plan in plans:
         rows.append(
             [
                 InlineKeyboardButton(
@@ -95,3 +94,47 @@ def invoice_kb(pay_url: str, invoice_id: str, provider: str = "cryptobot", back_
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
         ]
     )
+
+
+def _device_word(qty: int) -> str:
+    """Русское склонение слова 'устройство' под число (простая эвристика,
+    для чисел из DEVICE_QTY_PRESETS этого достаточно: 1, 2-4, 5+)."""
+    if qty % 10 == 1 and qty % 100 != 11:
+        return "устройство"
+    if 2 <= qty % 10 <= 4 and not (12 <= qty % 100 <= 14):
+        return "устройства"
+    return "устройств"
+
+
+def devices_kb() -> InlineKeyboardMarkup:
+    """Клавиатура выбора количества докупаемых устройств."""
+    rows = []
+    for qty in DEVICE_QTY_PRESETS:
+        price_rub = round(config.extra_device_price_rub * qty)
+        price_usdt = round(config.extra_device_price_usdt * qty, 2)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"+{qty} {_device_word(qty)} — {price_rub}₽ / {price_usdt}$",
+                    callback_data=f"devqty:{qty}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def device_payment_method_kb(qty: int, balance_enough: bool, balance_label: str) -> InlineKeyboardMarkup:
+    rows = []
+    if balance_enough:
+        rows.append(
+            [InlineKeyboardButton(text=f"💰 Оплатить с баланса ({balance_label})", callback_data=f"devpay:{qty}:balance")]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="💎 Крипта (CryptoBot)", callback_data=f"devpay:{qty}:cryptobot")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text="💳 СБП (Platega)", callback_data=f"devpay:{qty}:platega")]
+    )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="devices")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

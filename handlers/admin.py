@@ -11,7 +11,7 @@ from aiogram.types import (
     Message,
 )
 
-from config import config
+from config import PLANS, config
 from database.db import (
     PromoError,
     adjust_balance,
@@ -20,8 +20,12 @@ from database.db import (
     async_session,
     create_promo_code,
     get_or_create_user,
+    get_plans,
     get_promo_by_code,
     get_user_by_username,
+    reset_plan_price,
+    set_plan_enabled,
+    set_plan_price,
     set_promo_active,
 )
 
@@ -350,6 +354,161 @@ async def promo_disable(message: Message) -> None:
         await set_promo_active(session, promo, False)
 
     await message.answer(f"🚫 Промокод <code>{promo.code}</code> отключён")
+
+
+PLAN_HELP = (
+    "Формат:\n"
+    "<code>/plans</code> — список тарифов, их статус и цена\n"
+    "<code>/plan_disable КОД</code> — скрыть тариф из продажи\n"
+    "<code>/plan_enable КОД</code> — снова показать тариф\n"
+    "<code>/plan_price КОД ЦЕНА_RUB [ЦЕНА_USDT]</code> — изменить цену тарифа\n"
+    "<code>/plan_price_reset КОД</code> — вернуть цену по умолчанию (из конфига)\n\n"
+    "Коды тарифов: " + ", ".join(p["code"] for p in PLANS)
+)
+
+
+def _find_config_plan(plan_code: str) -> dict | None:
+    return next((p for p in PLANS if p["code"] == plan_code), None)
+
+
+@router.message(Command("plans"))
+async def plans_list(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    async with async_session() as session:
+        plans = await get_plans(session, include_disabled=True)
+
+    lines = ["💳 Тарифы:\n"]
+    for p in plans:
+        status = "✅" if p["enabled"] else "🚫"
+        base = _find_config_plan(p["code"])
+        price_note = ""
+        if base and (p["price_rub"] != base["price_rub"] or p["price_usdt"] != base["price_usdt"]):
+            price_note = f" (по умолчанию {base['price_usdt']}$ / {base['price_rub']}₽)"
+        lines.append(
+            f"{status} <code>{p['code']}</code> {p['title']} — {p['price_usdt']}$ / {p['price_rub']}₽{price_note}"
+        )
+    lines.append(f"\n{PLAN_HELP}")
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("plan_disable"))
+async def plan_disable(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if not parts:
+        await message.answer("Формат: <code>/plan_disable КОД</code>")
+        return
+
+    plan_code = parts[0]
+    if _find_config_plan(plan_code) is None:
+        await message.answer(f"Тарифа с кодом «{plan_code}» нет в конфиге")
+        return
+
+    async with async_session() as session:
+        await set_plan_enabled(session, plan_code, False)
+
+    await message.answer(f"🚫 Тариф <code>{plan_code}</code> отключён и больше не продаётся")
+
+
+@router.message(Command("plan_enable"))
+async def plan_enable(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if not parts:
+        await message.answer("Формат: <code>/plan_enable КОД</code>")
+        return
+
+    plan_code = parts[0]
+    if _find_config_plan(plan_code) is None:
+        await message.answer(f"Тарифа с кодом «{plan_code}» нет в конфиге")
+        return
+
+    async with async_session() as session:
+        await set_plan_enabled(session, plan_code, True)
+
+    await message.answer(f"✅ Тариф <code>{plan_code}</code> снова доступен для покупки")
+
+
+@router.message(Command("plan_price"))
+async def plan_price(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if len(parts) < 2:
+        await message.answer(
+            "Формат: <code>/plan_price КОД ЦЕНА_RUB [ЦЕНА_USDT]</code>\n"
+            "Если ЦЕНА_USDT не указана — меняется только цена в рублях.\n"
+            "Пример: <code>/plan_price 1m 199</code>\n"
+            "Пример: <code>/plan_price 1m 199 2.49</code>"
+        )
+        return
+
+    plan_code, price_rub_raw, *rest = parts
+    if _find_config_plan(plan_code) is None:
+        await message.answer(f"Тарифа с кодом «{plan_code}» нет в конфиге")
+        return
+
+    try:
+        price_rub = float(price_rub_raw)
+    except ValueError:
+        await message.answer("Цена в рублях должна быть числом")
+        return
+    if price_rub < 0:
+        await message.answer("Цена не может быть отрицательной")
+        return
+
+    price_usdt = None
+    if rest:
+        try:
+            price_usdt = float(rest[0])
+        except ValueError:
+            await message.answer("Цена в USDT должна быть числом")
+            return
+        if price_usdt < 0:
+            await message.answer("Цена не может быть отрицательной")
+            return
+
+    async with async_session() as session:
+        await set_plan_price(session, plan_code, price_rub=price_rub, price_usdt=price_usdt)
+        plans = await get_plans(session, include_disabled=True)
+
+    plan = next(p for p in plans if p["code"] == plan_code)
+    await message.answer(
+        f"✅ Цена тарифа <code>{plan_code}</code> обновлена: {plan['price_usdt']}$ / {plan['price_rub']}₽"
+    )
+
+
+@router.message(Command("plan_price_reset"))
+async def plan_price_reset(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if not parts:
+        await message.answer("Формат: <code>/plan_price_reset КОД</code>")
+        return
+
+    plan_code = parts[0]
+    base = _find_config_plan(plan_code)
+    if base is None:
+        await message.answer(f"Тарифа с кодом «{plan_code}» нет в конфиге")
+        return
+
+    async with async_session() as session:
+        await reset_plan_price(session, plan_code)
+
+    await message.answer(
+        f"✅ Цена тарифа <code>{plan_code}</code> сброшена к значению по умолчанию: "
+        f"{base['price_usdt']}$ / {base['price_rub']}₽"
+    )
 
 
 @router.message(Command("add_balance"))

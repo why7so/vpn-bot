@@ -94,6 +94,12 @@ python main.py
       3 дня триала сразу + 15% скидка на покупки в течение года
 - `/promo_list` — список всех промокодов со статусом и статистикой использования
 - `/promo_disable КОД` — отключить промокод
+- `/plans` — список тарифов с текущим статусом (включён/отключён) и ценой
+- `/plan_disable КОД` — скрыть тариф из продажи (бот/мини-апп перестают его предлагать)
+- `/plan_enable КОД` — снова включить тариф
+- `/plan_price КОД ЦЕНА_RUB [ЦЕНА_USDT]` — изменить цену тарифа, например `/plan_price 1m 199` или `/plan_price 1m 199 2.49`
+- `/plan_price_reset КОД` — вернуть цену тарифа к значению по умолчанию из `config.py`
+- `/add_balance TG_ID_или_@username СУММА` — начислить/списать баланс пользователю
 
 ## Структура проекта
 
@@ -101,11 +107,12 @@ python main.py
 main.py                  — точка входа, регистрация роутеров, планировщика и WebApp API
 config.py                — конфиг из .env + тарифные планы
 database/
-  models.py              — User, Subscription, Invoice, PromoCode, PromoRedemption (SQLAlchemy)
+  models.py              — User, Subscription, Invoice, PromoCode, PromoRedemption, PlanOverride (SQLAlchemy)
   db.py                  — async-хелперы для работы с БД (SQLite)
 handlers/
   user.py                — /start, меню, покупка, баланс, промокоды, проверка оплаты
-  admin.py                — /stats, /promo_create, /promo_list, /promo_disable
+  admin.py                — /stats, /promo_create, /promo_list, /promo_disable, /plans, /plan_disable,
+                             /plan_enable, /plan_price, /plan_price_reset, /add_balance
 services/
   vpn_provider.py          — выдача VPN-доступа (сейчас ЗАГЛУШКА, см. докстринг файла;
                              в будущем — клиент к собственному мастер-серверу)

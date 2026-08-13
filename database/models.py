@@ -14,10 +14,13 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Идентификатор клиента у VPN-провайдера (раньше — uuid клиента в 3x-ui,
-    # теперь — заглушка/будущий мастер-сервер). Имя колонки в БД оставлено
-    # как есть ради совместимости с уже существующими базами.
+    # Идентификатор клиента у VPN-провайдера (сейчас — заглушка/будущий
+    # мастер-сервер). Имя колонки в БД оставлено как есть ради совместимости
+    # с уже существующими базами.
     vpn_client_uuid: Mapped[str | None] = mapped_column("xui_client_uuid", String, nullable=True)
+    # Кол-во дополнительных устройств, докупленных сверх базового DEVICE_LIMIT
+    # (см. config.device_limit и доп. услугу "Докупить устройства" в боте).
+    extra_devices: Mapped[int] = mapped_column(Integer, default=0)
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     discount_percent: Mapped[float] = mapped_column(Float, default=0.0)
     discount_uses_left: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = безлимит до истечения срока
@@ -48,8 +51,10 @@ class Invoice(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     plan_code: Mapped[str | None] = mapped_column(String, nullable=True)
-    purpose: Mapped[str] = mapped_column(String, default="subscription")  # subscription | topup
+    purpose: Mapped[str] = mapped_column(String, default="subscription")  # subscription | topup | devices
     provider: Mapped[str] = mapped_column(String, default="cryptobot")  # cryptobot | platega
+    # Кол-во устройств в счёте — используется только при purpose="devices"
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     invoice_id: Mapped[str] = mapped_column(String, unique=True)  # id счёта у провайдера
     pay_url: Mapped[str] = mapped_column(String)
     amount: Mapped[float] = mapped_column(Float)
@@ -123,6 +128,25 @@ class LoginToken(Base):
     # успешного входа отредактировать его (убрать кнопку, показать успех).
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class PlanOverride(Base):
+    """Админ-переопределение тарифа из config.PLANS: включён/выключен и/или
+    переопределённая цена. Запись создаётся только когда админ что-то
+    поменял — если её нет, тариф активен и цена берётся из config.PLANS как есть.
+    title/days тарифа по-прежнему берутся из config.PLANS (тут не хранятся).
+    """
+
+    __tablename__ = "plan_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_code: Mapped[str] = mapped_column(String, unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    price_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
+    )
 
 
 class BrowserSession(Base):

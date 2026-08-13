@@ -17,12 +17,18 @@ class Config:
     admin_ids: list[int] = field(default_factory=_get_admin_ids)
 
     # --- Выдача VPN-доступа ---
-    # Раньше здесь была конфигурация 3x-ui, сейчас интеграция отключена.
-    # services/vpn_provider.py — временная заглушка; когда подключим
-    # собственный мастер-сервер, реквизиты для него пойдут сюда:
+    # services/vpn_provider.py — пока мастер-сервер не готов, работает как
+    # заглушка (см. докстринг в самом файле).
     master_api_base_url: str = os.getenv("MASTER_API_BASE_URL", "")
     master_api_token: str = os.getenv("MASTER_API_TOKEN", "")
     vpn_email_prefix: str = os.getenv("VPN_EMAIL_PREFIX", "tgbot_")
+    # Максимальное число одновременных подключений (устройств) на одного клиента.
+    # Используется провайдером VPN-доступа (см. services/vpn_provider.py).
+    device_limit: int = int(os.getenv("DEVICE_LIMIT", "3"))
+    # Цена одного дополнительного устройства сверх лимита (доп. услуга,
+    # см. handlers/user.py: "devices"). Действует бессрочно, пока активна подписка.
+    extra_device_price_rub: float = float(os.getenv("EXTRA_DEVICE_PRICE_RUB", "40"))
+    extra_device_price_usdt: float = float(os.getenv("EXTRA_DEVICE_PRICE_USDT", "0.45"))
 
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")
     crypto_pay_api_url: str = os.getenv("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api")
@@ -58,12 +64,15 @@ class Config:
 
 # Тарифные планы: (название, дней, цена в USDT / цена в RUB)
 PLANS = [
-    {"code": "1m", "title": "1 месяц", "days": 30, "price_usdt": 3.5, "price_rub": 349},
-    {"code": "3m", "title": "3 месяца", "days": 90, "price_usdt": 9.0, "price_rub": 899},
-    {"code": "12m", "title": "12 месяцев", "days": 365, "price_usdt": 30.0, "price_rub": 2990},
+    {"code": "1m", "title": "1 месяц", "days": 30, "price_usdt": 1.99, "price_rub": 149},
+    {"code": "3m", "title": "3 месяца", "days": 90, "price_usdt": 3.99, "price_rub": 299},
+    {"code": "12m", "title": "12 месяцев", "days": 365, "price_usdt": 9.99, "price_rub": 749},
 ]
 
 # Пресеты пополнения баланса (в рублях, оплата через Platega/СБП)
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
+
+# Пресеты количества докупаемых устройств (доп. услуга сверх DEVICE_LIMIT)
+DEVICE_QTY_PRESETS = [4, 6, 8, 10]
 
 config = Config()

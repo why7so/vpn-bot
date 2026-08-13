@@ -4,12 +4,13 @@ import secrets
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from config import config
+from config import PLANS, config
 from database.models import (
     Base,
     BrowserSession,
     Invoice,
     LoginToken,
+    PlanOverride,
     PromoCode,
     PromoRedemption,
     Subscription,
@@ -31,6 +32,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_login_token_columns(conn)
+        await _ensure_device_columns(conn)
 
 
 async def _ensure_login_token_columns(conn) -> None:
@@ -45,6 +47,23 @@ async def _ensure_login_token_columns(conn) -> None:
             sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN chat_id INTEGER")
         if "message_id" not in existing:
             sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN message_id INTEGER")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def _ensure_device_columns(conn) -> None:
+    """Сам-миграция: users.extra_devices и invoices.quantity появились
+    позже вместе с доп. услугой "Докупить устройства" — добавляем их в уже
+    существующие БД, если их ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        users_columns = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
+        if "extra_devices" not in users_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN extra_devices INTEGER DEFAULT 0")
+
+        invoices_columns = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(invoices)").fetchall()}
+        if "quantity" not in invoices_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN quantity INTEGER")
 
     await conn.run_sync(_add_missing_columns)
 
@@ -74,6 +93,23 @@ async def get_user_by_username(session: AsyncSession, username: str) -> User | N
 async def set_vpn_client_uuid(session: AsyncSession, user: User, client_uuid: str) -> None:
     user.vpn_client_uuid = client_uuid
     await session.commit()
+
+
+def effective_device_limit(user: User) -> int:
+    """Итоговый лимит устройств пользователя: базовый (config.device_limit) +
+    докупленные сверх него (user.extra_devices). Если базовый лимит 0
+    (без ограничений), докупать устройства бессмысленно — итог тоже 0."""
+    if config.device_limit <= 0:
+        return 0
+    return config.device_limit + user.extra_devices
+
+
+async def add_extra_devices(session: AsyncSession, user: User, count: int) -> User:
+    """Начисляет пользователю дополнительные устройства (доп. услуга)."""
+    user.extra_devices += count
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 async def adjust_balance(session: AsyncSession, user: User, delta: float) -> User:
@@ -171,6 +207,7 @@ async def create_invoice(
     provider: str = "cryptobot",
     currency: str = "USDT",
     discount_percent: float = 0.0,
+    quantity: int | None = None,
 ) -> Invoice:
     inv = Invoice(
         user_id=user_id,
@@ -182,6 +219,7 @@ async def create_invoice(
         amount=amount,
         currency=currency,
         discount_percent=discount_percent,
+        quantity=quantity,
         status="active",
     )
     session.add(inv)
@@ -203,6 +241,81 @@ async def mark_invoice_paid(session: AsyncSession, invoice: Invoice) -> None:
 async def all_active_subscriptions(session: AsyncSession) -> list[Subscription]:
     result = await session.execute(select(Subscription))
     return list(result.scalars().all())
+
+
+# --- Тарифы: config.PLANS + админ-переопределения (вкл/выкл, цена) ---
+
+
+async def get_plans(session: AsyncSession, include_disabled: bool = False) -> list[dict]:
+    """Тарифы из config.PLANS с учётом переопределений админа.
+    По умолчанию — только включённые (для показа клиенту в боте/мини-аппе)."""
+    result = await session.execute(select(PlanOverride))
+    overrides = {o.plan_code: o for o in result.scalars().all()}
+
+    plans = []
+    for p in PLANS:
+        o = overrides.get(p["code"])
+        enabled = o.enabled if o is not None else True
+        if not enabled and not include_disabled:
+            continue
+        plans.append(
+            {
+                "code": p["code"],
+                "title": p["title"],
+                "days": p["days"],
+                "price_usdt": o.price_usdt if (o is not None and o.price_usdt is not None) else p["price_usdt"],
+                "price_rub": o.price_rub if (o is not None and o.price_rub is not None) else p["price_rub"],
+                "enabled": enabled,
+            }
+        )
+    return plans
+
+
+async def get_plan(session: AsyncSession, plan_code: str, include_disabled: bool = False) -> dict | None:
+    """Один тариф с учётом переопределений. Если он отключён и include_disabled=False — None
+    (как будто тарифа не существует), даже если он есть в config.PLANS."""
+    plans = await get_plans(session, include_disabled=True)
+    plan = next((p for p in plans if p["code"] == plan_code), None)
+    if plan is None or (not plan["enabled"] and not include_disabled):
+        return None
+    return plan
+
+
+async def _get_or_create_plan_override(session: AsyncSession, plan_code: str) -> PlanOverride:
+    result = await session.execute(select(PlanOverride).where(PlanOverride.plan_code == plan_code))
+    override = result.scalar_one_or_none()
+    if override is None:
+        override = PlanOverride(plan_code=plan_code)
+        session.add(override)
+    return override
+
+
+async def set_plan_enabled(session: AsyncSession, plan_code: str, enabled: bool) -> None:
+    override = await _get_or_create_plan_override(session, plan_code)
+    override.enabled = enabled
+    await session.commit()
+
+
+async def set_plan_price(
+    session: AsyncSession,
+    plan_code: str,
+    price_rub: float | None = None,
+    price_usdt: float | None = None,
+) -> None:
+    override = await _get_or_create_plan_override(session, plan_code)
+    if price_rub is not None:
+        override.price_rub = price_rub
+    if price_usdt is not None:
+        override.price_usdt = price_usdt
+    await session.commit()
+
+
+async def reset_plan_price(session: AsyncSession, plan_code: str) -> None:
+    """Сбрасывает переопределённую цену обратно к значению из config.PLANS."""
+    override = await _get_or_create_plan_override(session, plan_code)
+    override.price_rub = None
+    override.price_usdt = None
+    await session.commit()
 
 
 class PromoError(Exception):
