@@ -15,6 +15,17 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     # Доп. услуга "Докупить устройства" — работает как бот-нативный флоу,
     # не завязана на настроенный WEBAPP_URL.
     rows.append([InlineKeyboardButton(text="📦 Докупить устройства", callback_data="devices")])
+    # Пользовательское соглашение и политика конфиденциальности отдаются
+    # как статические страницы веб-приложения (см. webapp-frontend/terms.html,
+    # privacy.html) — ссылки доступны только если настроен WEBAPP_URL.
+    if config.webapp_url:
+        base = config.webapp_url.rstrip("/")
+        rows.append(
+            [
+                InlineKeyboardButton(text="📄 Соглашение", url=f"{base}/terms"),
+                InlineKeyboardButton(text="🔒 Конфиденциальность", url=f"{base}/privacy"),
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
