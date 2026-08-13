@@ -14,11 +14,16 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     if config.webapp_url:
         base = config.webapp_url.rstrip("/")
         rows.append([InlineKeyboardButton(text="Личный кабинет", web_app=WebAppInfo(url=base), style="Success")])
-        rows.append([InlineKeyboardButton(text="Продлить подписку", web_app=WebAppInfo(url=f"{base}#plans-title"), style="Success")])
         rows.append([InlineKeyboardButton(text="Подключить устройство", web_app=WebAppInfo(url=f"{base}#connect-device"), style="Danger")])
-    # Доп. услуга "Докупить устройства" — работает как бот-нативный флоу,
-    # не завязана на настроенный WEBAPP_URL.
-    rows.append([InlineKeyboardButton(text="Докупить устройства", callback_data="devices")])
+    # "О сервисе" — подменю с поддержкой, соглашением и политикой
+    # конфиденциальности (см. about_kb).
+    rows.append([InlineKeyboardButton(text="О сервисе", callback_data="about")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def about_kb() -> InlineKeyboardMarkup:
+    """Подменю "О сервисе": поддержка, соглашение, политика конфиденциальности."""
+    rows = []
     # Контакт тех. поддержки. Если SUPPORT_USERNAME не задан в .env — вместо
     # ссылки показываем заглушку с подсказкой администратору настроить его.
     if config.support_username:
@@ -31,12 +36,9 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     # privacy.html) — ссылки доступны только если настроен WEBAPP_URL.
     if config.webapp_url:
         base = config.webapp_url.rstrip("/")
-        rows.append(
-            [
-                InlineKeyboardButton(text="Соглашение", url=f"{base}/terms"),
-                InlineKeyboardButton(text="Конфиденциальность", url=f"{base}/privacy"),
-            ]
-        )
+        rows.append([InlineKeyboardButton(text="Соглашение", url=f"{base}/terms")])
+        rows.append([InlineKeyboardButton(text="Конфиденциальность", url=f"{base}/privacy")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
