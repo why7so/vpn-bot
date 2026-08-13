@@ -50,10 +50,21 @@ class Config:
     # без иконки. ID эмодзи можно получить, переслав боту сообщение с нужным
     # премиум-эмодзи — админ-команда /getemojiid в handlers/admin.py вернёт ID.
     # Пусто по умолчанию — кнопки рендерятся как обычно, без иконок.
-    icon_emoji_buy: str = os.getenv("ICON_EMOJI_BUY", "") or None
-    icon_emoji_account: str = os.getenv("ICON_EMOJI_ACCOUNT", "") or None
-    icon_emoji_connect_device: str = os.getenv("ICON_EMOJI_CONNECT_DEVICE", "") or None
-    icon_emoji_about: str = os.getenv("ICON_EMOJI_ABOUT", "") or None
+    #
+    # ВАЖНО: icon_custom_emoji_id — это String в Telegram Bot API. Приводим
+    # явным str(...), а не полагаемся на то, что переменная окружения придёт
+    # строкой — некоторые платформы деплоя (Docker Compose с нецитированным
+    # числом в YAML и т.п.) могут подсунуть число, и pydantic-валидация
+    # aiogram упадёт с ValidationError при отправке /start.
+    def _icon_emoji(env_name: str, default: str = "") -> str | None:
+        raw = os.getenv(env_name, default)
+        raw = str(raw).strip() if raw is not None else ""
+        return raw or None
+
+    icon_emoji_buy: str = _icon_emoji("ICON_EMOJI_BUY")
+    icon_emoji_account: str = _icon_emoji("ICON_EMOJI_ACCOUNT")
+    icon_emoji_connect_device: str = _icon_emoji("ICON_EMOJI_CONNECT_DEVICE")
+    icon_emoji_about: str = _icon_emoji("ICON_EMOJI_ABOUT", "6028435952299413210")
     icon_emoji_support: str = os.getenv("ICON_EMOJI_SUPPORT", "") or None
 
     # --- Telegram Mini App (WebApp) ---
