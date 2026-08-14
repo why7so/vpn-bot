@@ -77,8 +77,8 @@ def _profile_text(user, sub) -> str:
         f"{discount_line}</blockquote>\n\n"
         '<tg-emoji emoji-id="5766902139376898645">🔑</tg-emoji> <b>Ваша подписка:</b>\n'
         f"<blockquote>{sub_line}</blockquote>\n\n"
-        f'<tg-emoji emoji-id="5805331990618053402">📅</tg-emoji> <b>Срок действия:</b> {expiry_line}\n\n'
         "Platega test"
+        f'<tg-emoji emoji-id="5805331990618053402">📅</tg-emoji> <b>Срок действия:</b> {expiry_line}\n\n'
     )
 
 
