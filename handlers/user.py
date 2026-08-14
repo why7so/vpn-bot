@@ -68,11 +68,11 @@ def _profile_text(user, sub) -> str:
         discount_line = f"🏷 Скидка: {user.discount_percent:.0f}%{uses_text}{expires_text}\n"
 
     return (
-        f"👋 Добро пожаловать в <b>{config.vpn_name}</b>!\n\n"
-        "👤 <b>Профиль:</b>\n"
+        f'<tg-emoji emoji-id="6041921818896372382">👋</tg-emoji> Добро пожаловать в <b>{config.vpn_name}</b>!\n\n'
+        '<tg-emoji emoji-id="6032609071373226027">👤</tg-emoji> <b>Профиль:</b>\n'
         "<blockquote>"
-        f"📝 Имя: {name}\n"
-        f"🆔 ID: <code>{user.tg_id}</code>\n"
+        f'<tg-emoji emoji-id="5895519358871932592">📝</tg-emoji> Имя: {name}\n'
+        f'<tg-emoji emoji-id="5766975922620076409">🆔</tg-emoji> ID: <code>{user.tg_id}</code>\n'
         f"💳 Баланс: {user.balance:.0f} ₽\n"
         f"{discount_line}</blockquote>\n\n"
         "🔑 <b>Ваша подписка:</b>\n"
