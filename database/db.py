@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 import secrets
 import uuid
 
@@ -18,6 +19,8 @@ from database.models import (
     User,
 )
 
+logger = logging.getLogger(__name__)
+
 # pool_pre_ping — проверяет соединение перед использованием и молча
 # переподключается, если оно протухло. Для SQLite (локальный файл) это
 # почти no-op, а для PostgreSQL на отдельном мастер-сервере защищает от
@@ -35,9 +38,50 @@ BROWSER_SESSION_TTL_DAYS = 30
 
 async def init_db() -> None:
     async with engine.begin() as conn:
+        await _reset_tables_if_schema_mismatch(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_login_token_columns(conn)
         await _ensure_device_columns(conn)
+
+
+async def _reset_tables_if_schema_mismatch(conn) -> None:
+    """users.id перешёл с autoincrement INTEGER на UUID. create_all не умеет
+    менять тип уже существующей колонки — на базе, где таблица users была
+    создана ДО этого перехода, чтение User.id падает (SQLAlchemy пытается
+    распарсить целое число как UUID). Раз старые данные не жалко — при
+    обнаружении такого рассинхрона просто дропаем users и таблицы, у которых
+    есть FK на неё (в порядке от зависимых к родительской), и даём create_all
+    создать их заново по актуальной схеме. Если базе уже сразу создана
+    с UUID (например, свежий деплой) — эта функция ничего не делает."""
+
+    def _needs_reset(sync_conn) -> bool:
+        insp = inspect(sync_conn)
+        if "users" not in insp.get_table_names():
+            return False
+        columns = {col["name"]: col["type"] for col in insp.get_columns("users")}
+        id_col = columns.get("id")
+        if id_col is None:
+            return False
+        type_name = str(id_col).upper()
+        # PostgreSQL: тип называется "UUID". SQLite (генерик Uuid-тип
+        # эмулируется) хранит как "CHAR(32)". Всё остальное (INTEGER,
+        # BIGINT, SERIAL и т.п.) — старая схема, требующая сброса.
+        return "UUID" not in type_name and "CHAR(32)" not in type_name
+
+    def _drop_old_tables(sync_conn) -> None:
+        # Дочерние таблицы (ссылаются на users.id через FK) — первыми,
+        # затем сама users, чтобы не упереться в ограничение внешнего ключа.
+        for table in ("promo_redemptions", "invoices", "subscriptions", "users"):
+            sync_conn.exec_driver_sql(f"DROP TABLE IF EXISTS {table}")
+
+    if await conn.run_sync(_needs_reset):
+        logger.warning(
+            "users.id in the database uses the old integer schema (pre-UUID) — "
+            "dropping users/subscriptions/invoices/promo_redemptions to recreate "
+            "them with the current UUID-based schema. Data in these tables will "
+            "be lost (everything else, e.g. promo_codes, is left untouched)."
+        )
+        await conn.run_sync(_drop_old_tables)
 
 
 def _table_columns(sync_conn, table_name: str) -> set[str]:
