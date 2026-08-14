@@ -1,7 +1,7 @@
 import datetime as dt
 import secrets
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import PLANS, config
@@ -17,7 +17,11 @@ from database.models import (
     User,
 )
 
-engine = create_async_engine(f"sqlite+aiosqlite:///{config.db_path}")
+# pool_pre_ping — проверяет соединение перед использованием и молча
+# переподключается, если оно протухло. Для SQLite (локальный файл) это
+# почти no-op, а для PostgreSQL на отдельном мастер-сервере защищает от
+# разрывов соединения по сети/таймаутов простоя.
+engine = create_async_engine(config.database_url, pool_pre_ping=True)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 # Токен из /start weblogin живёт недолго — это просто "мостик" от бота к
@@ -35,16 +39,22 @@ async def init_db() -> None:
         await _ensure_device_columns(conn)
 
 
+def _table_columns(sync_conn, table_name: str) -> set[str]:
+    """Диалект-независимая замена PRAGMA table_info(...) — работает
+    одинаково и на SQLite, и на PostgreSQL через SQLAlchemy inspector."""
+    return {col["name"] for col in inspect(sync_conn).get_columns(table_name)}
+
+
 async def _ensure_login_token_columns(conn) -> None:
-    """Лёгкая сам-миграция для SQLite: create_all не добавляет новые колонки
+    """Лёгкая сам-миграция: create_all не добавляет новые колонки
     в уже существующие таблицы. chat_id/message_id в login_tokens появились
     позже — добавляем их, если ещё нет (для свежих БД они и так будут
     созданы через create_all выше, тогда ALTER TABLE просто не понадобится)."""
 
     def _add_missing_columns(sync_conn):
-        existing = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(login_tokens)").fetchall()}
+        existing = _table_columns(sync_conn, "login_tokens")
         if "chat_id" not in existing:
-            sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN chat_id INTEGER")
+            sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN chat_id BIGINT")
         if "message_id" not in existing:
             sync_conn.exec_driver_sql("ALTER TABLE login_tokens ADD COLUMN message_id INTEGER")
 
@@ -57,11 +67,11 @@ async def _ensure_device_columns(conn) -> None:
     существующие БД, если их ещё нет."""
 
     def _add_missing_columns(sync_conn):
-        users_columns = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
+        users_columns = _table_columns(sync_conn, "users")
         if "extra_devices" not in users_columns:
             sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN extra_devices INTEGER DEFAULT 0")
 
-        invoices_columns = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(invoices)").fetchall()}
+        invoices_columns = _table_columns(sync_conn, "invoices")
         if "quantity" not in invoices_columns:
             sync_conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN quantity INTEGER")
 

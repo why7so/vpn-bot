@@ -40,7 +40,13 @@ class Config:
     platega_secret: str = os.getenv("PLATEGA_SECRET", "")
     platega_api_url: str = os.getenv("PLATEGA_API_URL", "https://app.platega.io")
 
+    # БД: если задан DATABASE_URL — используем его (общая PostgreSQL на
+    # мастер-сервере, формат postgresql+asyncpg://user:pass@host:5432/dbname).
+    # Если не задан — фолбэк на локальный SQLite-файл (для разработки/старых
+    # деплоев без мастер-сервера). db_path сохранён отдельно ради обратной
+    # совместимости — на случай, если где-то ещё читается напрямую.
     db_path: str = os.getenv("DB_PATH", "bot.db")
+    database_url: str = os.getenv("DATABASE_URL", "") or f"sqlite+aiosqlite:///{db_path}"
     support_username: str = os.getenv("SUPPORT_USERNAME", "")
     vpn_name: str = os.getenv("VPN_NAME", "Unnamed VPN")
 
