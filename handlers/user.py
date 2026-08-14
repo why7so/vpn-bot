@@ -76,7 +76,7 @@ def _profile_text(user, sub) -> str:
         f"💳 Баланс: {user.balance:.0f} ₽\n"
         f"{discount_line}</blockquote>\n\n"
         "🔑 <b>Ваша подписка:</b>\n"
-        f"{sub_line}\n\n"
+        f"<blockquote>{sub_line}</blockquote>\n\n"
         f"📅 <b>Срок действия:</b> {expiry_line}\n\n"
         "Platega test"
     )
