@@ -77,8 +77,7 @@ def _profile_text(user, sub) -> str:
         "🔑 <b>Ваша подписка:</b>\n"
         f"{sub_line}\n\n"
         f"📅 <b>Срок действия:</b> {expiry_line}\n\n"
-        "Platega test\n"
-        "💡 <i>Используйте кнопки ниже для управления подпиской.</i>"
+        "Platega test"
     )
 
 
