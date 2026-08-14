@@ -62,8 +62,8 @@ class Config:
         return raw or None
 
     icon_emoji_buy: str = _icon_emoji("ICON_EMOJI_BUY", "5904462880941545555")
-    icon_emoji_account: str = _icon_emoji("ICON_EMOJI_ACCOUNT")
-    icon_emoji_connect_device: str = _icon_emoji("ICON_EMOJI_CONNECT_DEVICE")
+    icon_emoji_account: str = _icon_emoji("ICON_EMOJI_ACCOUNT", "6035084557378654059")
+    icon_emoji_connect_device: str = _icon_emoji("ICON_EMOJI_CONNECT_DEVICE", "6028171274939797252")
     icon_emoji_about: str = _icon_emoji("ICON_EMOJI_ABOUT", "6028435952299413210")
     icon_emoji_support: str = os.getenv("ICON_EMOJI_SUPPORT", "") or None
 
