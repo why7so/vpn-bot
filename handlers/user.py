@@ -73,11 +73,11 @@ def _profile_text(user, sub) -> str:
         "<blockquote>"
         f'<tg-emoji emoji-id="5895519358871932592">📝</tg-emoji> Имя: {name}\n'
         f'<tg-emoji emoji-id="5766975922620076409">🆔</tg-emoji> ID: <code>{user.tg_id}</code>\n'
-        f"💳 Баланс: {user.balance:.0f} ₽\n"
+        f'<tg-emoji emoji-id="5769126056262898415">💳</tg-emoji> Баланс: {user.balance:.0f} ₽\n'
         f"{discount_line}</blockquote>\n\n"
-        "🔑 <b>Ваша подписка:</b>\n"
+        '<tg-emoji emoji-id="5766902139376898645">🔑</tg-emoji> <b>Ваша подписка:</b>\n'
         f"<blockquote>{sub_line}</blockquote>\n\n"
-        f"📅 <b>Срок действия:</b> {expiry_line}\n\n"
+        f'<tg-emoji emoji-id="5805331990618053402">📅</tg-emoji> <b>Срок действия:</b> {expiry_line}\n\n'
         "Platega test"
     )
 
