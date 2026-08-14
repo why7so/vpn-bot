@@ -61,7 +61,7 @@ class Config:
         raw = str(raw).strip() if raw is not None else ""
         return raw or None
 
-    icon_emoji_buy: str = _icon_emoji("ICON_EMOJI_BUY")
+    icon_emoji_buy: str = _icon_emoji("ICON_EMOJI_BUY", "5904462880941545555")
     icon_emoji_account: str = _icon_emoji("ICON_EMOJI_ACCOUNT")
     icon_emoji_connect_device: str = _icon_emoji("ICON_EMOJI_CONNECT_DEVICE")
     icon_emoji_about: str = _icon_emoji("ICON_EMOJI_ABOUT", "6028435952299413210")
