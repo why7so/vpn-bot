@@ -1,6 +1,7 @@
 import datetime as dt
+import uuid
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -11,7 +12,13 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # UUID вместо autoincrement-integer — основной идентификатор пользователя
+    # в общей схеме (см. мастер-сервер: users/subscriptions/payments и т.д.
+    # ссылаются на users по этому id). tg_id остаётся отдельным полем — это
+    # "точка входа" от Telegram, а не первичный ключ: апдейты от Telegram
+    # всегда приходят с numeric tg_id, поэтому колонка и её lookup никуда
+    # не делись, просто больше не используются как PK/FK.
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
     # Идентификатор клиента у VPN-провайдера (сейчас — заглушка/будущий
@@ -35,7 +42,7 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), unique=True)
     plan_code: Mapped[str] = mapped_column(String)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
     subscription_url: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -49,7 +56,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"))
     plan_code: Mapped[str | None] = mapped_column(String, nullable=True)
     purpose: Mapped[str] = mapped_column(String, default="subscription")  # subscription | topup | devices
     provider: Mapped[str] = mapped_column(String, default="cryptobot")  # cryptobot | platega
@@ -102,7 +109,7 @@ class PromoRedemption(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     promo_id: Mapped[int] = mapped_column(ForeignKey("promo_codes.id"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"))
     redeemed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 

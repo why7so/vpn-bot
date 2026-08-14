@@ -1,5 +1,6 @@
 import datetime as dt
 import secrets
+import uuid
 
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -171,14 +172,14 @@ async def consume_discount_use(session: AsyncSession, user: User) -> None:
     await session.commit()
 
 
-async def get_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
+async def get_subscription(session: AsyncSession, user_id: uuid.UUID) -> Subscription | None:
     result = await session.execute(select(Subscription).where(Subscription.user_id == user_id))
     return result.scalar_one_or_none()
 
 
 async def upsert_subscription(
     session: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     days: int,
     subscription_url: str | None,
     plan_code: str | None = None,
@@ -208,7 +209,7 @@ async def upsert_subscription(
 
 async def create_invoice(
     session: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     invoice_id: str,
     pay_url: str,
     amount: float,
