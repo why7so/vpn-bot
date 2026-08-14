@@ -51,6 +51,22 @@ logger = logging.getLogger(__name__)
 START_BANNER_PATH = Path(__file__).resolve().parent.parent / "assets" / "start_banner.png"
 
 
+async def _edit_message(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+    """Замена callback.message.edit_text() для навигации по меню.
+
+    Главное меню теперь отправляется как фото с подписью (см. cmd_start и
+    assets/start_banner.png) — у такого сообщения нет .text, только
+    .caption, и Telegram отклоняет edit_text на нём с ошибкой (кнопки
+    "Тарифы и оплата", "О сервисе" и другие переходы из главного меню
+    молча переставали работать). Этот хелпер сам выбирает edit_caption
+    для фото-сообщений и edit_text для обычных текстовых.
+    """
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=text, reply_markup=reply_markup)
+    else:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+
+
 def _profile_text(user, sub) -> str:
     if sub is not None:
         sub_line = sub.subscription_url or "будет выдана после оплаты"
@@ -220,14 +236,14 @@ async def back_main(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
 
-    await callback.message.edit_text(_profile_text(user, sub), reply_markup=main_menu_kb())
+    await _edit_message(callback, _profile_text(user, sub), reply_markup=main_menu_kb())
     await callback.answer()
 
 
 @router.callback_query(F.data == "about")
 async def about_menu(callback: CallbackQuery) -> None:
     """Подменю "О сервисе": поддержка, соглашение, политика конфиденциальности."""
-    await callback.message.edit_text(f"ℹ️ {config.vpn_name}", reply_markup=about_kb())
+    await _edit_message(callback, f"ℹ️ {config.vpn_name}", reply_markup=about_kb())
     await callback.answer()
 
 
@@ -245,7 +261,7 @@ async def support_stub(callback: CallbackQuery) -> None:
 async def show_plans(callback: CallbackQuery) -> None:
     async with async_session() as session:
         plans = await get_plans(session)
-    await callback.message.edit_text("Выберите тарифный план:", reply_markup=plans_kb(plans))
+    await _edit_message(callback, "Выберите тарифный план:", reply_markup=plans_kb(plans))
     await callback.answer()
 
 
@@ -269,7 +285,7 @@ async def connect_device(callback: CallbackQuery) -> None:
             f"📦 Лимит устройств: {limit_line}."
         )
 
-    await callback.message.edit_text(text, reply_markup=back_main_kb())
+    await _edit_message(callback, text, reply_markup=back_main_kb())
     await callback.answer()
 
 
@@ -368,7 +384,7 @@ async def promo_redeem_button(callback: CallbackQuery, bot: Bot) -> None:
     # (например, личка между двумя обычными пользователями), не имеют обычного
     # message_id — доступен только inline_message_id.
     if callback.message is not None:
-        await callback.message.edit_text(text, reply_markup=main_menu_kb())
+        await _edit_message(callback, text, reply_markup=main_menu_kb())
     elif callback.inline_message_id:
         await bot.edit_message_text(
             text, inline_message_id=callback.inline_message_id, reply_markup=main_menu_kb()
@@ -409,7 +425,7 @@ async def choose_plan(callback: CallbackQuery) -> None:
             f"<b>{price_usdt} USDT / {price_rub}₽</b> (скидка {discount:.0f}%)"
         )
 
-    await callback.message.edit_text(
+    await _edit_message(callback, 
         f"Тариф: {plan['title']}\n"
         f"{price_lines}\n"
         f"Ваш баланс: {user.balance:.0f} ₽\n\n"
@@ -461,7 +477,7 @@ async def show_devices(callback: CallbackQuery) -> None:
         "Дополнительное устройство действует бессрочно, пока активна подписка.\n"
         "Выберите количество:"
     )
-    await callback.message.edit_text(text, reply_markup=devices_kb())
+    await _edit_message(callback, text, reply_markup=devices_kb())
     await callback.answer()
 
 
@@ -482,7 +498,7 @@ async def choose_device_qty(callback: CallbackQuery) -> None:
     price_usdt, price_rub = _extra_device_price(qty)
     balance_enough = user.balance >= price_rub
 
-    await callback.message.edit_text(
+    await _edit_message(callback, 
         f"Дополнительно устройств: {qty}\n"
         f"Крипта: {price_usdt} USDT · Рубли: {price_rub}₽\n"
         f"Ваш баланс: {user.balance:.0f} ₽\n\n"
@@ -530,7 +546,7 @@ async def choose_device_payment(callback: CallbackQuery) -> None:
             await adjust_balance(session, user, -price_rub)
             new_limit = await _grant_extra_devices(session, callback.from_user.id, callback.from_user.username, qty)
 
-        await callback.message.edit_text(
+        await _edit_message(callback, 
             f"✅ Оплата с баланса прошла успешно!\nДобавлено устройств: {qty}\n"
             f"Текущий лимит устройств: {new_limit}",
             reply_markup=main_menu_kb(),
@@ -585,7 +601,7 @@ async def choose_device_payment(callback: CallbackQuery) -> None:
             )
             amount_text = f"{price_usdt} USDT"
 
-    await callback.message.edit_text(
+    await _edit_message(callback, 
         f"Дополнительно устройств: {qty}\nСумма: {amount_text}\n\n"
         "Нажмите «Оплатить», после оплаты вернитесь и нажмите «Я оплатил».",
         reply_markup=invoice_kb(invoice["pay_url"], str(invoice["invoice_id"]), provider=provider, back_callback="devices"),
@@ -633,7 +649,7 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
             )
             return
 
-        await callback.message.edit_text(
+        await _edit_message(callback, 
             "✅ Скидка 100% — доступ выдан бесплатно!\n\n"
             f"Ваша ссылка-подписка (добавьте в клиент V2rayNG / Streisand / Hiddify):\n{subscription_url}",
             reply_markup=main_menu_kb(),
@@ -672,7 +688,7 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
             if discount > 0:
                 await consume_discount_use(session, user)
 
-        await callback.message.edit_text(
+        await _edit_message(callback, 
             "✅ Оплата с баланса прошла успешно, доступ выдан!\n\n"
             f"Ваша ссылка-подписка (добавьте в клиент V2rayNG / Streisand / Hiddify):\n{subscription_url}",
             reply_markup=main_menu_kb(),
@@ -731,7 +747,7 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
             )
             amount_text = f"{price_usdt} USDT"
 
-    await callback.message.edit_text(
+    await _edit_message(callback, 
         f"Тариф: {plan['title']}\nСумма: {amount_text}\n\n"
         "Нажмите «Оплатить», после оплаты вернитесь и нажмите «Я оплатил».",
         reply_markup=invoice_kb(invoice["pay_url"], str(invoice["invoice_id"]), provider=provider),
@@ -767,7 +783,7 @@ async def check_payment(callback: CallbackQuery) -> None:
             user = await adjust_balance(session, user, local_invoice.amount)
             await mark_invoice_paid(session, local_invoice)
 
-            await callback.message.edit_text(
+            await _edit_message(callback, 
                 f"✅ Баланс пополнен на {local_invoice.amount:.0f} ₽\n"
                 f"Текущий баланс: {user.balance:.0f} ₽",
                 reply_markup=main_menu_kb(),
@@ -781,7 +797,7 @@ async def check_payment(callback: CallbackQuery) -> None:
             )
             await mark_invoice_paid(session, local_invoice)
 
-            await callback.message.edit_text(
+            await _edit_message(callback, 
                 f"✅ Оплата подтверждена!\nДобавлено устройств: {local_invoice.quantity}\n"
                 f"Текущий лимит устройств: {new_limit}",
                 reply_markup=main_menu_kb(),
@@ -818,7 +834,7 @@ async def check_payment(callback: CallbackQuery) -> None:
             await consume_discount_use(session, user)
         await mark_invoice_paid(session, local_invoice)
 
-    await callback.message.edit_text(
+    await _edit_message(callback, 
         "✅ Оплата подтверждена, доступ выдан!\n\n"
         f"Ваша ссылка-подписка (добавьте в клиент V2rayNG / Streisand / Hiddify):\n{subscription_url}",
         reply_markup=main_menu_kb(),
