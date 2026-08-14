@@ -69,11 +69,11 @@ def _profile_text(user, sub) -> str:
 
     return (
         f"👋 Добро пожаловать в <b>{config.vpn_name}</b>!\n\n"
-        "👤 <b>Профиль:</b>\n"
+        "<blockquote>👤 <b>Профиль:</b>\n"
         f"📝 Имя: {name}\n"
         f"🆔 ID: <code>{user.tg_id}</code>\n"
         f"💳 Баланс: {user.balance:.0f} ₽\n"
-        f"{discount_line}\n"
+        f"{discount_line}</blockquote>\n\n"
         "🔑 <b>Ваша подписка:</b>\n"
         f"{sub_line}\n\n"
         f"📅 <b>Срок действия:</b> {expiry_line}\n\n"
