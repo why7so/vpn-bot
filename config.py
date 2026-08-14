@@ -11,6 +11,20 @@ def _get_admin_ids() -> list[int]:
     return [int(x) for x in raw.split(",") if x.strip().isdigit()]
 
 
+def _normalize_database_url(url: str) -> str:
+    """Railway (и Heroku/Render) кладут DATABASE_URL от Postgres-плагина в
+    виде "postgres://..." или "postgresql://..." — без указания async-
+    драйвера. SQLAlchemy в этом случае по умолчанию берёт sync psycopg2,
+    который несовместим с create_async_engine — бот падал бы при старте
+    с ошибкой "requires an async driver". Принудительно проставляем
+    +asyncpg, если драйвер не указан явно."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
 @dataclass
 class Config:
     bot_token: str = os.getenv("BOT_TOKEN", "")
@@ -46,7 +60,7 @@ class Config:
     # деплоев без мастер-сервера). db_path сохранён отдельно ради обратной
     # совместимости — на случай, если где-то ещё читается напрямую.
     db_path: str = os.getenv("DB_PATH", "bot.db")
-    database_url: str = os.getenv("DATABASE_URL", "") or f"sqlite+aiosqlite:///{db_path}"
+    database_url: str = _normalize_database_url(os.getenv("DATABASE_URL", "") or f"sqlite+aiosqlite:///{db_path}")
     support_username: str = os.getenv("SUPPORT_USERNAME", "")
     vpn_name: str = os.getenv("VPN_NAME", "Unnamed VPN")
 
