@@ -110,13 +110,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     payload = (command.args or "").strip()
 
     # Приветственный баннер — отдельным сообщением перед остальным текстом.
-    # Если файл вдруг отсутствует на диске (например, не задеплоили assets/),
-    # тихо пропускаем, чтобы не ронять /start целиком.
-    if START_BANNER_PATH.exists():
-        try:
-            await message.answer_photo(FSInputFile(START_BANNER_PATH))
-        except Exception:
-            logger.exception("Failed to send /start banner for tg_id=%s", message.from_user.id)
+    # Приветственный баннер. Раньше отправлялся отдельным сообщением, теперь —
+    # если файл на месте, объединяем его с текстом профиля в одно
+    # photo+caption сообщение ниже. Если баннер отсутствует на диске
+    # (например, не задеплоили assets/) — просто не показываем его, не роняя
+    # /start целиком.
+    has_banner = START_BANNER_PATH.exists()
 
     # Ссылка "Войти через Telegram" на сайте ведёт на t.me/<bot>?start=weblogin —
     # выдаём одноразовую ссылку для входа в веб-версию в обычном браузере
@@ -126,11 +125,16 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             await message.answer("Веб-версия личного кабинета пока не настроена.")
             return
         login_token, login_url = await _issue_browser_login_link(message.from_user.id, message.from_user.username)
-        sent = await message.answer(
+        weblogin_text = (
             "🌐 Ссылка для входа в личный кабинет в браузере (одноразовая, "
-            "действует 5 минут):",
-            reply_markup=_browser_login_kb(login_url),
+            "действует 5 минут):"
         )
+        if has_banner:
+            sent = await message.answer_photo(
+                FSInputFile(START_BANNER_PATH), caption=weblogin_text, reply_markup=_browser_login_kb(login_url)
+            )
+        else:
+            sent = await message.answer(weblogin_text, reply_markup=_browser_login_kb(login_url))
         async with async_session() as session:
             await set_login_token_message(session, login_token, sent.chat.id, sent.message_id)
         return
@@ -172,7 +176,28 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             await message.answer(promo_text)
         keyboard = main_menu_kb()
 
-    await message.answer(_profile_text(user, sub), reply_markup=keyboard)
+    profile_text = _profile_text(user, sub)
+
+    # Фото + текст одним сообщением, если текст укладывается в лимит подписи
+    # Telegram (1024 символа). У caption лимит меньше, чем у обычного текста
+    # сообщения (4096) — subscription_url в редких случаях может быть длинным
+    # (VLESS/VMESS-ссылки с закодированными параметрами), тогда подпись не
+    # влезет и Telegram отклонит запрос. На этот случай — фолбэк на прежнее
+    # поведение (фото и текст отдельными сообщениями), чтобы /start не падал.
+    if has_banner and len(profile_text) <= 1024:
+        try:
+            await message.answer_photo(FSInputFile(START_BANNER_PATH), caption=profile_text, reply_markup=keyboard)
+            return
+        except Exception:
+            logger.exception("Failed to send /start banner+caption for tg_id=%s", message.from_user.id)
+
+    if has_banner:
+        try:
+            await message.answer_photo(FSInputFile(START_BANNER_PATH))
+        except Exception:
+            logger.exception("Failed to send /start banner for tg_id=%s", message.from_user.id)
+
+    await message.answer(profile_text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "weblogin")
