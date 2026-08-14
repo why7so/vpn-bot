@@ -1,9 +1,10 @@
 import datetime as dt
 import logging
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import DEVICE_QTY_PRESETS, config
 from database.db import (
@@ -45,6 +46,9 @@ from services.vpn_provider import VpnProviderError, vpn_client
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
+
+# Баннер для /start (assets/start_banner.png в корне репозитория).
+START_BANNER_PATH = Path(__file__).resolve().parent.parent / "assets" / "start_banner.png"
 
 
 def _profile_text(user, sub) -> str:
@@ -104,6 +108,15 @@ def _browser_login_kb(login_url: str) -> InlineKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject) -> None:
     payload = (command.args or "").strip()
+
+    # Приветственный баннер — отдельным сообщением перед остальным текстом.
+    # Если файл вдруг отсутствует на диске (например, не задеплоили assets/),
+    # тихо пропускаем, чтобы не ронять /start целиком.
+    if START_BANNER_PATH.exists():
+        try:
+            await message.answer_photo(FSInputFile(START_BANNER_PATH))
+        except Exception:
+            logger.exception("Failed to send /start banner for tg_id=%s", message.from_user.id)
 
     # Ссылка "Войти через Telegram" на сайте ведёт на t.me/<bot>?start=weblogin —
     # выдаём одноразовую ссылку для входа в веб-версию в обычном браузере

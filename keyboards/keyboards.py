@@ -7,19 +7,6 @@ from config import DEVICE_QTY_PRESETS, config
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = []
-    # Тарифы/цены и оплата — бот-нативный флоу (см. handlers/user.py: "buy" ->
-    # plans_kb -> payment_method_kb), работает всегда, даже если WEBAPP_URL
-    # не настроен (в отличие от кнопок веб-приложения ниже).
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="Тарифы и оплата",
-                callback_data="buy",
-                style="success",
-                icon_custom_emoji_id=config.icon_emoji_buy,
-            )
-        ]
-    )
     if config.webapp_url:
         base = config.webapp_url.rstrip("/")
         rows.append(
@@ -37,11 +24,24 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Подключить устройство",
                     web_app=WebAppInfo(url=f"{base}#connect-device"),
-                    style="danger",
+                    style="success",
                     icon_custom_emoji_id=config.icon_emoji_connect_device,
                 )
             ]
         )
+    # Тарифы/цены и оплата — бот-нативный флоу (см. handlers/user.py: "buy" ->
+    # plans_kb -> payment_method_kb), работает всегда, даже если WEBAPP_URL
+    # не настроен (в отличие от кнопок веб-приложения выше).
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Тарифы и оплата",
+                callback_data="buy",
+                style="danger",
+                icon_custom_emoji_id=config.icon_emoji_buy,
+            )
+        ]
+    )
     # "О сервисе" — подменю с поддержкой, соглашением и политикой
     # конфиденциальности (см. about_kb).
     rows.append(
