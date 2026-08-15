@@ -597,6 +597,35 @@ async def add_balance(message: Message) -> None:
     )
 
 
+CMD_LIST_TEXT = (
+    "📋 <b>Список команд</b>\n\n"
+    "<b>Пользователь</b>\n"
+    "/start — главное меню\n\n"
+    "<b>Админ</b>\n"
+    "/stats — статистика подписок (активные/истёкшие)\n"
+    "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
+    "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
+    "/plans — список тарифов со статусом и ценой\n"
+    "/plan_disable КОД — скрыть тариф из продажи\n"
+    "/plan_enable КОД — включить тариф\n"
+    "/plan_price КОД ЦЕНА_RUB [ЦЕНА_USDT] — изменить цену тарифа\n"
+    "/plan_price_reset КОД — сбросить цену тарифа к значению по умолчанию\n"
+    "/promo_create КОД ТИП ЗНАЧЕНИЕ [...] — создать промокод\n"
+    "/promo_list — список промокодов со статистикой\n"
+    "/promo_disable КОД — отключить промокод\n"
+    "/promo_send TG_ID_или_@username КОД — отправить промокод конкретному пользователю\n"
+    "/getemojiid — получить id кастомного эмодзи (ответом на сообщение с ним)\n"
+    "/cmdlist — этот список"
+)
+
+
+@router.message(Command("cmdlist"))
+async def cmdlist(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    await message.answer(CMD_LIST_TEXT)
+
+
 @router.message(Command("user_info"))
 async def user_info(message: Message) -> None:
     if not _is_admin(message.from_user.id):

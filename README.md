@@ -102,6 +102,7 @@ python main.py
 - `/add_balance TG_ID_или_@username СУММА` — начислить/списать баланс пользователю
 - `/user_info TG_ID_или_@username` — полная информация о пользователе: UUID, TG ID,
   username, баланс, скидка, доп. устройства, подписка, последние счета
+- `/cmdlist` — список всех команд бота с кратким описанием
 
 ## Структура проекта
 
@@ -114,7 +115,7 @@ database/
 handlers/
   user.py                — /start, меню, покупка, баланс, промокоды, проверка оплаты
   admin.py                — /stats, /promo_create, /promo_list, /promo_disable, /plans, /plan_disable,
-                             /plan_enable, /plan_price, /plan_price_reset, /add_balance, /user_info
+                             /plan_enable, /plan_price, /plan_price_reset, /add_balance, /user_info, /cmdlist
 services/
   vpn_provider.py          — выдача VPN-доступа (сейчас ЗАГЛУШКА, см. докстринг файла;
                              в будущем — клиент к собственному мастер-серверу)
