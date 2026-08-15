@@ -25,6 +25,7 @@ from database.db import (
     get_plans,
     get_promo_by_code,
     get_recent_invoices,
+    get_referral_count,
     get_subscription,
     get_user_by_id,
     get_user_by_tg_id,
@@ -667,7 +668,7 @@ async def add_balance(message: Message) -> None:
 CMD_LIST_TEXT = (
     "📋 <b>Список команд</b>\n\n"
     "<b>Пользователь</b>\n"
-    "/start — главное меню\n\n"
+    "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n\n"
     "<b>Админ</b>\n"
     "/stats — статистика подписок (активные/истёкшие)\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
@@ -724,6 +725,7 @@ async def user_info(message: Message) -> None:
 
         subscription = await get_subscription(session, user.id)
         invoices = await get_recent_invoices(session, user.id, limit=5)
+        referral_count = await get_referral_count(session, user.tg_id)
 
     lines = [
         "👤 <b>Информация о пользователе</b>",
@@ -744,6 +746,10 @@ async def user_info(message: Message) -> None:
             f", до {user.discount_expires_at:%Y-%m-%d}" if user.discount_expires_at else ""
         )
         lines.append(f"Скидка: {user.discount_percent:.0f}% ({uses_text}{expires_text})")
+
+    if user.referred_by:
+        lines.append(f"Приглашён: TG_ID <code>{user.referred_by}</code>")
+    lines.append(f"Пригласил(а) сам(а): {referral_count}")
 
     lines.append("")
     if subscription:

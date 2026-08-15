@@ -59,6 +59,9 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def about_kb() -> InlineKeyboardMarkup:
     """Подменю "О сервисе": поддержка, соглашение, политика конфиденциальности."""
     rows = []
+    rows.append(
+        [InlineKeyboardButton(text="Реферальная программа", callback_data="referral")]
+    )
     # Контакт тех. поддержки. Если SUPPORT_USERNAME не задан в .env — вместо
     # ссылки показываем заглушку с подсказкой администратору настроить его.
     if config.support_username:

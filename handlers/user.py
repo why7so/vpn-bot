@@ -21,9 +21,11 @@ from database.db import (
     get_or_create_user,
     get_plan,
     get_plans,
+    get_referral_count,
     get_subscription,
     mark_invoice_paid,
     redeem_promo_code,
+    register_referral_if_new,
     set_login_token_message,
     set_user_discount,
     set_vpn_client_uuid,
@@ -176,6 +178,29 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             logger.exception("Unexpected error while redeeming promo (deep-link) for tg_id=%s", message.from_user.id)
             promo_text = "Произошла непредвиденная ошибка при активации промокода. Попробуйте позже."
 
+    # Реф. ссылка вида https://t.me/<bot>?start=ref_<TG_ID>. Если это первый
+    # /start у пользователя (в базе его ещё нет) — засчитываем реферала и
+    # начисляем пригласившему бонус. Молча игнорируем некорректный payload
+    # (битый TG_ID, самоприглашение, несуществующий реферер) — /start не
+    # должен падать из-за плохой ссылки.
+    if payload.startswith("ref_"):
+        try:
+            referrer_tg_id = int(payload[len("ref_"):])
+        except ValueError:
+            referrer_tg_id = None
+        if referrer_tg_id is not None:
+            async with async_session() as session:
+                credited = await register_referral_if_new(session, message.from_user.id, referrer_tg_id)
+            if credited:
+                try:
+                    await message.bot.send_message(
+                        referrer_tg_id,
+                        f"🎉 По вашей реферальной ссылке пришёл новый пользователь — "
+                        f"на баланс начислено {config.referral_bonus_rub:.0f}₽.",
+                    )
+                except Exception:
+                    logger.warning("Failed to notify referrer tg_id=%s about bonus", referrer_tg_id)
+
     async with async_session() as session:
         user, sub = await _render_profile(session, message.from_user.id, message.from_user.username)
 
@@ -244,6 +269,25 @@ async def back_main(callback: CallbackQuery) -> None:
 async def about_menu(callback: CallbackQuery) -> None:
     """Подменю "О сервисе": поддержка, соглашение, политика конфиденциальности."""
     await _edit_message(callback, f"ℹ️ {config.vpn_name}", reply_markup=about_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "referral")
+async def referral_menu(callback: CallbackQuery) -> None:
+    bot_username = (await callback.bot.get_me()).username
+    ref_link = f"https://t.me/{bot_username}?start=ref_{callback.from_user.id}"
+
+    async with async_session() as session:
+        count = await get_referral_count(session, callback.from_user.id)
+
+    text = (
+        "🎁 <b>Реферальная программа</b>\n\n"
+        f"Приглашайте друзей — за каждого, кто впервые запустит бота по вашей "
+        f"ссылке, вам начислится {config.referral_bonus_rub:.0f}₽ на баланс.\n\n"
+        f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
+        f"Приглашено: {count}"
+    )
+    await _edit_message(callback, text, reply_markup=back_main_kb())
     await callback.answer()
 
 

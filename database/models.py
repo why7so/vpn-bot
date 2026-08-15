@@ -32,6 +32,10 @@ class User(Base):
     discount_percent: Mapped[float] = mapped_column(Float, default=0.0)
     discount_uses_left: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = безлимит до истечения срока
     discount_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # tg_id пригласившего пользователя (реферальная программа). Храним именно
+    # tg_id, а не users.id — реф. ссылка формата ?start=ref_<TG_ID> строится
+    # из него напрямую, без лишнего похода в БД за UUID при генерации ссылки.
+    referred_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
     subscription: Mapped["Subscription"] = relationship(back_populates="user", uselist=False)

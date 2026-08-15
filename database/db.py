@@ -3,7 +3,7 @@ import logging
 import secrets
 import uuid
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import PLANS, config
@@ -42,6 +42,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_login_token_columns(conn)
         await _ensure_device_columns(conn)
+        await _ensure_referral_columns(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -121,6 +122,54 @@ async def _ensure_device_columns(conn) -> None:
             sync_conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN quantity INTEGER")
 
     await conn.run_sync(_add_missing_columns)
+
+
+async def _ensure_referral_columns(conn) -> None:
+    """Сам-миграция: users.referred_by появился вместе с реферальной
+    программой — добавляем колонку в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        users_columns = _table_columns(sync_conn, "users")
+        if "referred_by" not in users_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN referred_by BIGINT")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
+    result = await session.execute(select(func.count()).select_from(User).where(User.referred_by == tg_id))
+    return result.scalar_one()
+
+
+async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_tg_id: int) -> bool:
+    """Реф. ссылка вида ?start=ref_<TG_ID>: если пользователь tg_id ещё не
+    существует в базе — создаёт его с привязкой referred_by и сразу
+    начисляет рефереру бонус config.referral_bonus_rub. Возвращает True,
+    если бонус реально начислен.
+
+    Важно: создаёт пользователя ЗДЕСЬ (не в get_or_create_user), чтобы
+    гарантированно поймать момент "это первый /start", а не полагаться на
+    отдельную проверку до похода в get_or_create_user (иначе между проверкой
+    и созданием юзер мог бы засчитаться дважды). get_or_create_user,
+    вызванный следом в _render_profile, просто найдёт уже созданную запись
+    и не тронет referred_by.
+    """
+    if referrer_tg_id == tg_id:
+        return False  # нельзя пригласить самого себя
+
+    existing = await session.execute(select(User).where(User.tg_id == tg_id))
+    if existing.scalar_one_or_none() is not None:
+        return False  # это не первый /start — бонус уже мог быть (или не полагается) раньше
+
+    referrer = await get_user_by_tg_id(session, referrer_tg_id)
+    if referrer is None:
+        return False  # реферер с таким tg_id не найден — ссылка невалидна
+
+    user = User(tg_id=tg_id, referred_by=referrer_tg_id)
+    session.add(user)
+    referrer.balance = round(referrer.balance + config.referral_bonus_rub, 2)
+    await session.commit()
+    return True
 
 
 async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | None) -> User:

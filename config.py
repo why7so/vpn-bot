@@ -43,6 +43,7 @@ class Config:
     # см. handlers/user.py: "devices"). Действует бессрочно, пока активна подписка.
     extra_device_price_rub: float = float(os.getenv("EXTRA_DEVICE_PRICE_RUB", "40"))
     extra_device_price_usdt: float = float(os.getenv("EXTRA_DEVICE_PRICE_USDT", "0.45"))
+    referral_bonus_rub: float = float(os.getenv("REFERRAL_BONUS_RUB", "15"))
 
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")
     crypto_pay_api_url: str = os.getenv("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api")
