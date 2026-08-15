@@ -44,6 +44,7 @@ class Config:
     extra_device_price_rub: float = float(os.getenv("EXTRA_DEVICE_PRICE_RUB", "40"))
     extra_device_price_usdt: float = float(os.getenv("EXTRA_DEVICE_PRICE_USDT", "0.45"))
     referral_bonus_rub: float = float(os.getenv("REFERRAL_BONUS_RUB", "15"))
+    trial_days: int = int(os.getenv("TRIAL_DAYS", "3"))  # 0 = отключить бесплатный пробный период
 
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")
     crypto_pay_api_url: str = os.getenv("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api")

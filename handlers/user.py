@@ -23,6 +23,7 @@ from database.db import (
     get_plans,
     get_referral_count,
     get_subscription,
+    get_user_by_tg_id,
     mark_invoice_paid,
     redeem_promo_code,
     register_referral_if_new,
@@ -135,6 +136,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     # /start целиком.
     has_banner = START_BANNER_PATH.exists()
 
+    # Определяем "первый ли это /start" ДО любых side-effects (создания
+    # пользователя реф-обработчиком/get_or_create_user) — на этом флаге
+    # завязана выдача бесплатного пробного периода ниже.
+    async with async_session() as session:
+        is_new_user = (await get_user_by_tg_id(session, message.from_user.id)) is None
+
     # Ссылка "Войти через Telegram" на сайте ведёт на t.me/<bot>?start=weblogin —
     # выдаём одноразовую ссылку для входа в веб-версию в обычном браузере
     # (не Mini App). Отдельная ветка, не смешивается с активацией промокодов.
@@ -201,6 +208,25 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
                 except Exception:
                     logger.warning("Failed to notify referrer tg_id=%s about bonus", referrer_tg_id)
 
+    # Бесплатный пробный период при самом первом /start (config.trial_days,
+    # по умолчанию 3 дня; 0 — отключить). Не зависит от промокода/реф-ссылки —
+    # они могут применяться одновременно с триалом на одном и том же /start.
+    trial_text = None
+    if is_new_user and config.trial_days > 0:
+        try:
+            async with async_session() as session:
+                subscription_url = await _grant_subscription(
+                    session, message.from_user.id, message.from_user.username, "trial", config.trial_days
+                )
+            trial_text = (
+                f"🎁 Вам начислен бесплатный пробный период — {config.trial_days} дн.!\n"
+                f"Ссылка-подписка:\n{subscription_url}"
+            )
+        except VpnProviderError:
+            logger.exception("VPN provider error while granting trial for tg_id=%s", message.from_user.id)
+        except Exception:
+            logger.exception("Unexpected error while granting trial for tg_id=%s", message.from_user.id)
+
     async with async_session() as session:
         user, sub = await _render_profile(session, message.from_user.id, message.from_user.username)
 
@@ -210,11 +236,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     # (Telegram.WebApp.showPopup) сразу после открытия. Если мини-приложение
     # не настроено (нет WEBAPP_URL) — некуда показывать popup, тогда как
     # раньше отправляем текст обычным сообщением.
-    if promo_text and config.webapp_url:
-        keyboard = promo_result_kb(_shorten_for_popup(promo_text))
+    combined_text = "\n\n".join(t for t in (promo_text, trial_text) if t) or None
+    if combined_text and config.webapp_url:
+        keyboard = promo_result_kb(_shorten_for_popup(combined_text))
     else:
-        if promo_text:
-            await message.answer(promo_text)
+        if combined_text:
+            await message.answer(combined_text)
         keyboard = main_menu_kb()
 
     profile_text = _profile_text(user, sub)
