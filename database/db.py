@@ -535,6 +535,19 @@ async def redeem_promo_code(session: AsyncSession, code: str, user: User) -> Pro
     if result.scalar_one_or_none() is not None:
         raise PromoError("Вы уже использовали этот промокод")
 
+    if promo.type == "partner":
+        # Партнёрские коды дают пробный период + скидку — это одноразовая
+        # плюшка на пользователя в принципе, а не на конкретный код: если
+        # юзер уже гасил ЛЮБОЙ другой partner-промокод, второй раз (даже
+        # другим кодом того же типа) применить нельзя.
+        other_partner_used = await session.execute(
+            select(PromoRedemption)
+            .join(PromoCode, PromoRedemption.promo_id == PromoCode.id)
+            .where(PromoRedemption.user_id == user.id, PromoCode.type == "partner")
+        )
+        if other_partner_used.first() is not None:
+            raise PromoError("Вы уже использовали партнёрский промокод — повторно активировать нельзя")
+
     promo.used_count += 1
     session.add(PromoRedemption(promo_id=promo.id, user_id=user.id))
     await session.commit()
