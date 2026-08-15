@@ -412,17 +412,15 @@ async def _redeem_promo_for_user(user_id: int, username: str | None, code: str) 
                 f"Действует: {uses_text}, срок: {valid_text}."
             )
         else:  # partner
-            subscription_url = await _grant_subscription(
-                session, user_id, username, "promo", int(promo.value)
-            )
             user = await set_user_discount(
-                session, user, promo.extra_value or 0, promo.discount_uses, promo.discount_valid_days
+                session, user, promo.value, promo.discount_uses, promo.discount_valid_days
             )
+            uses_text = f"{promo.discount_uses} раз(а)" if promo.discount_uses else "без ограничения по количеству"
+            valid_text = f"{promo.discount_valid_days} дней" if promo.discount_valid_days else "бессрочно"
             text = (
                 f"✅ Партнёрский промокод активирован!\n"
-                f"🎁 Пробный период: {int(promo.value)} дней (доступ уже выдан)\n"
-                f"🏷 Скидка на покупки: {promo.extra_value:.0f}%\n\n"
-                f"Ваша ссылка-подписка:\n{subscription_url}"
+                f"🏷 Скидка {promo.value:.0f}% на покупку/продление подписки.\n"
+                f"Действует: {uses_text}, срок: {valid_text}."
             )
     return text
 

@@ -42,7 +42,7 @@ router = Router(name="admin")
 PROMO_HELP = (
     "Формат:\n"
     "<code>/promo_create КОД ТИП ЗНАЧЕНИЕ [max=N] [expires=YYYY-MM-DD] "
-    "[uses=N] [valid_days=N] [discount=N]</code>\n\n"
+    "[uses=N] [valid_days=N]</code>\n\n"
     "Типы:\n"
     "• <code>days</code> — бонусные дни подписки сразу\n"
     "  <code>/promo_create WELCOME7 days 7 max=100</code>\n"
@@ -53,9 +53,11 @@ PROMO_HELP = (
     "  <code>valid_days</code> — сколько дней скидка действует после активации (по умолчанию бессрочно)\n"
     "  <code>/promo_create FREEMONTH discount 100 uses=1 valid_days=3 max=50</code>\n"
     "  <code>/promo_create SPRING15 discount 15 uses=0 valid_days=30 max=500</code>\n"
-    "• <code>partner</code> — пробные дни + скидка % разом (ЗНАЧЕНИЕ = дни триала)\n"
-    "  <code>discount</code> — обязателен, % скидки на будущие покупки\n"
-    "  <code>/promo_create PARTNER15 partner 3 discount=15 uses=0 valid_days=365 max=1000</code>"
+    "• <code>partner</code> — то же самое, что discount, но ограничение "
+    "\"один раз на юзера\" считается по ЛЮБОМУ partner-коду сразу (не по "
+    "конкретному коду). Пробных дней не даёт — они и так выдаются "
+    "автоматически на первом /start.\n"
+    "  <code>/promo_create PARTNER15 partner 15 uses=0 valid_days=365 max=1000</code>"
 )
 
 
@@ -70,7 +72,7 @@ def _promo_value_text(promo) -> str:
         return f"скидка {promo.value:.0f}% ({uses_text}{valid_text})"
     uses_text = f"{promo.discount_uses}×" if promo.discount_uses else "безлимит"
     valid_text = f", {promo.discount_valid_days}д" if promo.discount_valid_days else ""
-    return f"{int(promo.value)} дней триала + скидка {promo.extra_value:.0f}% ({uses_text}{valid_text})"
+    return f"скидка {promo.value:.0f}% ({uses_text}{valid_text}) [partner]"
 
 
 def _promo_button_kb(bot_username: str, code: str) -> InlineKeyboardMarkup:
@@ -259,13 +261,13 @@ async def promo_create(message: Message, bot: Bot) -> None:
         await message.answer("Значение промокода (3-й аргумент) должно быть числом")
         return
 
-    if type_ in ("discount", "partner") and not (0 < value <= 100 if type_ == "discount" else value >= 0):
-        await message.answer("Для discount значение — процент от 1 до 100")
+    if type_ in ("discount", "partner") and not (0 < value <= 100):
+        await message.answer("Для discount/partner значение — процент от 1 до 100")
         return
 
     max_uses = None
     expires_at = None
-    discount_uses = 1 if type_ == "discount" else None  # для discount по умолчанию одноразовая
+    discount_uses = 1 if type_ in ("discount", "partner") else None  # по умолчанию одноразовая
     discount_valid_days = None
     extra_value = None
 
@@ -303,10 +305,6 @@ async def promo_create(message: Message, bot: Bot) -> None:
             except ValueError:
                 await message.answer(f"Не понял параметр «{token}»")
                 return
-
-    if type_ == "partner" and extra_value is None:
-        await message.answer("Для partner обязателен параметр discount=N (процент скидки)")
-        return
 
     async with async_session() as session:
         try:
@@ -443,7 +441,7 @@ async def promo_list(message: Message) -> None:
         elif p.type == "discount":
             value_text = f"скидка {p.value:.0f}%"
         else:
-            value_text = f"{int(p.value)}д триал + {p.extra_value:.0f}% скидка"
+            value_text = f"скидка {p.value:.0f}% [partner]"
         status = "✅" if p.active else "🚫"
         uses_text = f"{p.used_count}/{p.max_uses}" if p.max_uses else f"{p.used_count}/∞"
         expires_text = p.expires_at.strftime("%Y-%m-%d") if p.expires_at else "—"
