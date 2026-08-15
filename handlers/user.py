@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import DEVICE_QTY_PRESETS, config
@@ -23,6 +23,7 @@ from database.db import (
     get_plans,
     get_referral_count,
     get_subscription,
+    get_top_referrers,
     get_user_by_tg_id,
     mark_invoice_paid,
     redeem_promo_code,
@@ -322,6 +323,35 @@ async def referral_menu(callback: CallbackQuery) -> None:
     )
     await _edit_message(callback, text, reply_markup=back_main_kb())
     await callback.answer()
+
+
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+@router.message(Command("leaderboard"))
+async def leaderboard(message: Message) -> None:
+    """Топ-10 пользователей по числу приглашённых рефералов. Доступно всем —
+    не админ-команда."""
+    async with async_session() as session:
+        top = await get_top_referrers(session, limit=10)
+        my_count = await get_referral_count(session, message.from_user.id)
+
+    if not top:
+        await message.answer(
+            "🏆 <b>Топ-10 по рефералам</b>\n\nПока никто никого не пригласил — станьте первым!"
+        )
+        return
+
+    lines = ["🏆 <b>Топ-10 по рефералам</b>", ""]
+    for i, (user, count) in enumerate(top, start=1):
+        place = _MEDALS.get(i, f"{i}.")
+        name = f"@{user.username}" if user.username else f"id{user.tg_id}"
+        lines.append(f"{place} {name} — {count}")
+
+    lines.append("")
+    lines.append(f"Вы пригласили: {my_count}")
+
+    await message.answer("\n".join(lines))
 
 
 @router.callback_query(F.data == "support_stub")

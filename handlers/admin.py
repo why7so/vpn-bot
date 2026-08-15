@@ -666,7 +666,8 @@ async def add_balance(message: Message) -> None:
 CMD_LIST_TEXT = (
     "📋 <b>Список команд</b>\n\n"
     "<b>Пользователь</b>\n"
-    "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n\n"
+    "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n"
+    "/leaderboard — топ-10 по числу приглашённых рефералов\n\n"
     "<b>Админ</b>\n"
     "/stats — статистика подписок (активные/истёкшие)\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"

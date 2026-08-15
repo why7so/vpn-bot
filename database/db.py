@@ -141,6 +141,34 @@ async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     return result.scalar_one()
 
 
+async def get_top_referrers(session: AsyncSession, limit: int = 10) -> list[tuple[User, int]]:
+    """Топ рефереров по числу приглашённых (referred_by == их tg_id).
+    Возвращает список (User, count) отсортированный по убыванию count,
+    без пользователей с нулём приглашённых.
+    """
+    referrer_counts = await session.execute(
+        select(User.referred_by, func.count().label("cnt"))
+        .where(User.referred_by.is_not(None))
+        .group_by(User.referred_by)
+        .order_by(func.count().desc())
+        .limit(limit)
+    )
+    rows = referrer_counts.all()
+    if not rows:
+        return []
+
+    referrer_ids = [r[0] for r in rows]
+    users_result = await session.execute(select(User).where(User.tg_id.in_(referrer_ids)))
+    users_by_tg_id = {u.tg_id: u for u in users_result.scalars().all()}
+
+    top: list[tuple[User, int]] = []
+    for referrer_tg_id, cnt in rows:
+        user = users_by_tg_id.get(referrer_tg_id)
+        if user is not None:
+            top.append((user, cnt))
+    return top
+
+
 async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_tg_id: int) -> bool:
     """Реф. ссылка вида ?start=ref_<TG_ID>: если пользователь tg_id ещё не
     существует в базе — создаёт его с привязкой referred_by и сразу
