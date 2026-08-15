@@ -1,4 +1,5 @@
 import datetime as dt
+import uuid
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -25,12 +26,14 @@ from database.db import (
     get_promo_by_code,
     get_recent_invoices,
     get_subscription,
+    get_user_by_id,
     get_user_by_tg_id,
     get_user_by_username,
     reset_plan_price,
     set_plan_enabled,
     set_plan_price,
     set_promo_active,
+    set_subscription_url,
 )
 
 router = Router(name="admin")
@@ -106,6 +109,70 @@ async def _resolve_target_tg_id(session, token: str) -> tuple[int | None, str | 
             "если человек ни разу не заходил в бота, используйте его TG_ID."
         )
     return user.tg_id, None
+
+
+async def _resolve_target_user(session, token: str):
+    """Принимает UUID пользователя (из /user_info), TG_ID или @username.
+    Возвращает (User | None, error_message | None)."""
+    token = token.strip()
+    try:
+        user_id = uuid.UUID(token)
+    except ValueError:
+        pass
+    else:
+        user = await get_user_by_id(session, user_id)
+        if user is None:
+            return None, f"Пользователь с UUID <code>{token}</code> не найден в базе."
+        return user, None
+
+    tg_id, error = await _resolve_target_tg_id(session, token)
+    if error:
+        return None, error
+    user = await get_user_by_tg_id(session, tg_id)
+    if user is None:
+        return None, f"Пользователь с TG_ID <code>{tg_id}</code> не найден в базе."
+    return user, None
+
+
+@router.message(Command("set_vpn_link"))
+async def set_vpn_link(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=2)[1:]
+    if len(parts) < 2:
+        await message.answer(
+            "Формат: <code>/set_vpn_link ИДЕНТИФИКАТОР ССЫЛКА</code>\n"
+            "ИДЕНТИФИКАТОР — UUID пользователя (см. /user_info), TG_ID или @username.\n\n"
+            "Примеры:\n"
+            "<code>/set_vpn_link 3fa85f64-5717-4562-b3fc-2c963f66afa6 https://example.com/sub/abc123</code>\n"
+            "<code>/set_vpn_link @ivanov https://example.com/sub/abc123</code>"
+        )
+        return
+
+    target_raw, url = parts[0], parts[1].strip()
+
+    async with async_session() as session:
+        user, error = await _resolve_target_user(session, target_raw)
+        if error:
+            await message.answer(error)
+            return
+
+        sub = await set_subscription_url(session, user.id, url)
+
+    if sub is None:
+        await message.answer(
+            f"⚠️ У пользователя <code>{user.id}</code> ещё нет подписки — "
+            "сначала выдайте её (оплата/промокод//add_balance), потом привязывайте ссылку."
+        )
+        return
+
+    await message.answer(
+        f"✅ Ссылка на VPN-ключ привязана.\n\n"
+        f"UUID: <code>{user.id}</code>\n"
+        f"TG ID: <code>{user.tg_id}</code>\n"
+        f"Ссылка: <code>{sub.subscription_url}</code>"
+    )
 
 
 @router.message(Command("stats"))
@@ -605,6 +672,7 @@ CMD_LIST_TEXT = (
     "/stats — статистика подписок (активные/истёкшие)\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
+    "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"
     "/plans — список тарифов со статусом и ценой\n"
     "/plan_disable КОД — скрыть тариф из продажи\n"
     "/plan_enable КОД — включить тариф\n"

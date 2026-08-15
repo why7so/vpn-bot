@@ -103,6 +103,9 @@ python main.py
 - `/user_info TG_ID_или_@username` — полная информация о пользователе: UUID, TG ID,
   username, баланс, скидка, доп. устройства, подписка, последние счета
 - `/cmdlist` — список всех команд бота с кратким описанием
+- `/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА` — вручную привязать
+  ссылку на VPN-ключ к подписке пользователя (пока `services/vpn_provider.py`
+  — заглушка, этим можно подставлять ссылки, созданные руками на панели)
 
 ## Структура проекта
 
@@ -115,7 +118,8 @@ database/
 handlers/
   user.py                — /start, меню, покупка, баланс, промокоды, проверка оплаты
   admin.py                — /stats, /promo_create, /promo_list, /promo_disable, /plans, /plan_disable,
-                             /plan_enable, /plan_price, /plan_price_reset, /add_balance, /user_info, /cmdlist
+                             /plan_enable, /plan_price, /plan_price_reset, /add_balance, /user_info, /cmdlist,
+                             /set_vpn_link
 services/
   vpn_provider.py          — выдача VPN-доступа (сейчас ЗАГЛУШКА, см. докстринг файла;
                              в будущем — клиент к собственному мастер-серверу)

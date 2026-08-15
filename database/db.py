@@ -151,6 +151,29 @@ async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+    result = await session.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def set_subscription_url(session: AsyncSession, user_id: uuid.UUID, url: str) -> Subscription | None:
+    """Вручную прикрепляет ссылку на VPN-ключ к подписке пользователя.
+
+    Используется, пока services/vpn_provider.py — заглушка: админ создаёт
+    клиента руками на панели и подставляет боту готовую ссылку. Подписка
+    у пользователя уже должна существовать (выдана через оплату/промокод/
+    /add_balance-флоу) — эта функция её не создаёт, только правит URL.
+    Возвращает None, если подписки ещё нет.
+    """
+    sub = await get_subscription(session, user_id)
+    if sub is None:
+        return None
+    sub.subscription_url = url
+    await session.commit()
+    await session.refresh(sub)
+    return sub
+
+
 async def get_recent_invoices(session: AsyncSession, user_id: uuid.UUID, limit: int = 5) -> list[Invoice]:
     result = await session.execute(
         select(Invoice)
