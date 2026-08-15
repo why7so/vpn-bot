@@ -19,9 +19,13 @@ from database.db import (
     all_promo_codes,
     async_session,
     create_promo_code,
+    effective_device_limit,
     get_or_create_user,
     get_plans,
     get_promo_by_code,
+    get_recent_invoices,
+    get_subscription,
+    get_user_by_tg_id,
     get_user_by_username,
     reset_plan_price,
     set_plan_enabled,
@@ -591,3 +595,79 @@ async def add_balance(message: Message) -> None:
         f"✅ Баланс пользователя <code>{tg_id}</code> изменён на {sign}{amount:.0f}₽\n"
         f"Текущий баланс: {user.balance:.0f}₽"
     )
+
+
+@router.message(Command("user_info"))
+async def user_info(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if len(parts) < 1:
+        await message.answer(
+            "Формат: <code>/user_info TG_ID_или_@username</code>\n"
+            "Примеры:\n"
+            "<code>/user_info 123456789</code>\n"
+            "<code>/user_info @ivanov</code>"
+        )
+        return
+
+    target_raw = parts[0]
+
+    async with async_session() as session:
+        tg_id, error = await _resolve_target_tg_id(session, target_raw)
+        if error:
+            await message.answer(error)
+            return
+
+        user = await get_user_by_tg_id(session, tg_id)
+        if user is None:
+            await message.answer(f"Пользователь с TG_ID <code>{tg_id}</code> не найден в базе.")
+            return
+
+        subscription = await get_subscription(session, user.id)
+        invoices = await get_recent_invoices(session, user.id, limit=5)
+
+    lines = [
+        "👤 <b>Информация о пользователе</b>",
+        "",
+        f"UUID: <code>{user.id}</code>",
+        f"TG ID: <code>{user.tg_id}</code>",
+        f"Username: @{user.username}" if user.username else "Username: —",
+        f"Баланс: {user.balance:.0f}₽",
+        f"Доп. устройства: {user.extra_devices}",
+        f"Лимит устройств: {effective_device_limit(user) or '∞'}",
+        f"VPN client UUID: <code>{user.vpn_client_uuid}</code>" if user.vpn_client_uuid else "VPN client UUID: —",
+        f"Регистрация: {user.created_at:%Y-%m-%d %H:%M} UTC",
+    ]
+
+    if user.discount_percent > 0:
+        uses_text = f"{user.discount_uses_left}×" if user.discount_uses_left is not None else "безлимит"
+        expires_text = (
+            f", до {user.discount_expires_at:%Y-%m-%d}" if user.discount_expires_at else ""
+        )
+        lines.append(f"Скидка: {user.discount_percent:.0f}% ({uses_text}{expires_text})")
+
+    lines.append("")
+    if subscription:
+        status = "✅ активна" if subscription.expires_at > dt.datetime.utcnow() else "❌ истекла"
+        lines.append("📦 <b>Подписка</b>")
+        lines.append(f"Тариф: {subscription.plan_code}")
+        lines.append(f"Статус: {status}")
+        lines.append(f"Действует до: {subscription.expires_at:%Y-%m-%d %H:%M} UTC")
+    else:
+        lines.append("📦 Подписки нет")
+
+    lines.append("")
+    if invoices:
+        lines.append("💳 <b>Последние счета</b>")
+        for inv in invoices:
+            status_icon = {"paid": "✅", "active": "🕓", "expired": "❌"}.get(inv.status, "•")
+            lines.append(
+                f"{status_icon} {inv.created_at:%Y-%m-%d} — {inv.amount:.0f} {inv.currency} "
+                f"({inv.purpose}, {inv.provider}, {inv.status})"
+            )
+    else:
+        lines.append("💳 Счетов нет")
+
+    await message.answer("\n".join(lines))

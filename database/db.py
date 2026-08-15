@@ -145,6 +145,22 @@ async def get_user_by_username(session: AsyncSession, username: str) -> User | N
     return result.scalar_one_or_none()
 
 
+async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> User | None:
+    """В отличие от get_or_create_user — не создаёт пользователя, если его нет."""
+    result = await session.execute(select(User).where(User.tg_id == tg_id))
+    return result.scalar_one_or_none()
+
+
+async def get_recent_invoices(session: AsyncSession, user_id: uuid.UUID, limit: int = 5) -> list[Invoice]:
+    result = await session.execute(
+        select(Invoice)
+        .where(Invoice.user_id == user_id)
+        .order_by(Invoice.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def set_vpn_client_uuid(session: AsyncSession, user: User, client_uuid: str) -> None:
     user.vpn_client_uuid = client_uuid
     await session.commit()

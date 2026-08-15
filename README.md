@@ -100,6 +100,8 @@ python main.py
 - `/plan_price КОД ЦЕНА_RUB [ЦЕНА_USDT]` — изменить цену тарифа, например `/plan_price 1m 199` или `/plan_price 1m 199 2.49`
 - `/plan_price_reset КОД` — вернуть цену тарифа к значению по умолчанию из `config.py`
 - `/add_balance TG_ID_или_@username СУММА` — начислить/списать баланс пользователю
+- `/user_info TG_ID_или_@username` — полная информация о пользователе: UUID, TG ID,
+  username, баланс, скидка, доп. устройства, подписка, последние счета
 
 ## Структура проекта
 
@@ -112,7 +114,7 @@ database/
 handlers/
   user.py                — /start, меню, покупка, баланс, промокоды, проверка оплаты
   admin.py                — /stats, /promo_create, /promo_list, /promo_disable, /plans, /plan_disable,
-                             /plan_enable, /plan_price, /plan_price_reset, /add_balance
+                             /plan_enable, /plan_price, /plan_price_reset, /add_balance, /user_info
 services/
   vpn_provider.py          — выдача VPN-доступа (сейчас ЗАГЛУШКА, см. докстринг файла;
                              в будущем — клиент к собственному мастер-серверу)
