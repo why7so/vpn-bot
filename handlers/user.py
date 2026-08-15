@@ -523,6 +523,16 @@ async def choose_plan(callback: CallbackQuery) -> None:
     is_free = price_rub <= 0
     balance_enough = (not is_free) and user.balance >= price_rub
 
+    # Если баланса не хватает на полную оплату, но что-то на нём есть —
+    # автоматически спишем эту часть, а через СБП попросим доплатить только
+    # остаток (не нужно отдельно пополнять баланс перед покупкой). Крипта
+    # (USDT) баланс не примешивает — валюты разные.
+    balance_credit = 0.0
+    platega_remaining_rub = price_rub
+    if not is_free and not balance_enough and user.balance > 0:
+        balance_credit = round(min(user.balance, price_rub), 2)
+        platega_remaining_rub = round(price_rub - balance_credit)
+
     price_lines = f"Крипта: {plan['price_usdt']} USDT · Рубли: {plan['price_rub']}₽"
     if discount > 0:
         price_lines = (
@@ -530,12 +540,26 @@ async def choose_plan(callback: CallbackQuery) -> None:
             f"<b>{price_usdt} USDT / {price_rub}₽</b> (скидка {discount:.0f}%)"
         )
 
+    balance_note = ""
+    if balance_credit > 0:
+        balance_note = (
+            f"При оплате через СБП спишется {balance_credit:.0f}₽ с баланса — "
+            f"доплатить: {platega_remaining_rub:.0f}₽\n"
+        )
+
     await _edit_message(callback, 
         f"Тариф: {plan['title']}\n"
         f"{price_lines}\n"
-        f"Ваш баланс: {user.balance:.0f} ₽\n\n"
+        f"Ваш баланс: {user.balance:.0f} ₽\n"
+        f"{balance_note}\n"
         + ("Скидка полностью покрывает стоимость 🎉" if is_free else "Выберите способ оплаты:"),
-        reply_markup=payment_method_kb(plan_code, balance_enough, f"{price_rub:.0f}₽", is_free=is_free),
+        reply_markup=payment_method_kb(
+            plan_code,
+            balance_enough,
+            f"{price_rub:.0f}₽",
+            is_free=is_free,
+            platega_label=(f"доплатить {platega_remaining_rub:.0f}₽" if balance_credit > 0 else None),
+        ),
     )
     await callback.answer()
 
@@ -805,9 +829,45 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
 
         if provider == "platega":
+            # Автопримешивание баланса: если на балансе есть деньги (но не
+            # хватает на полную оплату — иначе выше сработал бы provider ==
+            # "balance"), спишем эту часть с баланса ПОСЛЕ подтверждения
+            # оплаты остатка (см. check_payment) — не сразу, чтобы деньги не
+            # "зависали" списанными, если счёт в Platega так и не оплатят.
+            balance_credit = round(min(user.balance, price_rub), 2) if price_rub > 0 else 0.0
+            remaining_rub = round(price_rub - balance_credit)
+
+            if remaining_rub <= 0:
+                # Между открытием экрана оплаты и нажатием кнопки баланс
+                # успел стать достаточным (например, пополнился) — просто
+                # выдаём доступ полностью с баланса, счёт провайдеру не нужен.
+                await adjust_balance(session, user, -price_rub)
+                try:
+                    subscription_url = await _grant_subscription(
+                        session, callback.from_user.id, callback.from_user.username, plan_code, plan["days"]
+                    )
+                except Exception:
+                    logger.exception("Error while granting fully-balance-covered subscription for tg_id=%s", callback.from_user.id)
+                    await adjust_balance(session, user, price_rub)  # откатываем списание
+                    await callback.answer(
+                        "Не удалось выдать доступ. Средства не списаны, попробуйте позже.",
+                        show_alert=True,
+                    )
+                    return
+                if discount > 0:
+                    await consume_discount_use(session, user)
+
+                await _edit_message(callback, 
+                    "✅ Оплата с баланса прошла успешно, доступ выдан!\n\n"
+                    f"Ваша ссылка-подписка (добавьте в клиент V2rayNG / Streisand / Hiddify):\n{subscription_url}",
+                    reply_markup=main_menu_kb(),
+                )
+                await callback.answer()
+                return
+
             try:
                 invoice = await platega_client.create_invoice(
-                    amount_rub=price_rub,
+                    amount_rub=remaining_rub,
                     comment=f"{config.vpn_name}: подписка {plan['title']}",
                     order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
                     user_id=user.tg_id,
@@ -825,13 +885,16 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 plan_code=plan_code,
                 invoice_id=str(invoice["invoice_id"]),
                 pay_url=invoice["pay_url"],
-                amount=price_rub,
+                amount=remaining_rub,
                 purpose="subscription",
                 provider="platega",
                 currency="RUB",
                 discount_percent=discount,
+                balance_credit=balance_credit,
             )
-            amount_text = f"{price_rub} ₽"
+            amount_text = f"{remaining_rub} ₽"
+            if balance_credit > 0:
+                amount_text += f" (+ {balance_credit:.0f}₽ спишется с баланса после оплаты)"
         else:
             invoice = await cryptopay_client.create_invoice(
                 amount_usdt=price_usdt,
@@ -934,9 +997,16 @@ async def check_payment(callback: CallbackQuery) -> None:
                 show_alert=True,
             )
             return
+
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         if local_invoice.discount_percent > 0:
-            user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
             await consume_discount_use(session, user)
+        if local_invoice.balance_credit > 0:
+            # Списываем ровно после успешной выдачи доступа, не раньше — чтобы
+            # деньги не пропадали, если выдача вдруг не удастся. min() на
+            # случай, если баланс уменьшился с момента создания счёта другой
+            # покупкой — не уходим в минус.
+            await adjust_balance(session, user, -min(local_invoice.balance_credit, user.balance))
         await mark_invoice_paid(session, local_invoice)
 
     await _edit_message(callback, 

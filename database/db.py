@@ -43,6 +43,7 @@ async def init_db() -> None:
         await _ensure_login_token_columns(conn)
         await _ensure_device_columns(conn)
         await _ensure_referral_columns(conn)
+        await _ensure_invoice_balance_credit_column(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -132,6 +133,19 @@ async def _ensure_referral_columns(conn) -> None:
         users_columns = _table_columns(sync_conn, "users")
         if "referred_by" not in users_columns:
             sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN referred_by BIGINT")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def _ensure_invoice_balance_credit_column(conn) -> None:
+    """Сам-миграция: invoices.balance_credit появился вместе с автопримешиванием
+    остатка баланса к оплате тарифа через провайдера — добавляем колонку
+    в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        invoices_columns = _table_columns(sync_conn, "invoices")
+        if "balance_credit" not in invoices_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN balance_credit FLOAT DEFAULT 0")
 
     await conn.run_sync(_add_missing_columns)
 
@@ -381,6 +395,7 @@ async def create_invoice(
     currency: str = "USDT",
     discount_percent: float = 0.0,
     quantity: int | None = None,
+    balance_credit: float = 0.0,
 ) -> Invoice:
     inv = Invoice(
         user_id=user_id,
@@ -393,6 +408,7 @@ async def create_invoice(
         currency=currency,
         discount_percent=discount_percent,
         quantity=quantity,
+        balance_credit=balance_credit,
         status="active",
     )
     session.add(inv)

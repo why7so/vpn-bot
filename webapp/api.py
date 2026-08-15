@@ -449,10 +449,38 @@ async def purchase(request: web.Request) -> web.Response:
         # через GET /api/invoice/{id} (аналог кнопки "Я оплатил" в боте). Кол-во доп.
         # устройств едет вместе со счётом в invoice.quantity и начисляется там же.
         devices_comment = f" + {extra_qty} устройств" if extra_qty else ""
+        balance_credit = 0.0
         if provider == "platega":
+            # Автопримешивание баланса: если денег на балансе не хватает на
+            # полную оплату (иначе сработала бы ветка provider == "balance"
+            # выше), но что-то есть — спишем эту часть ПОСЛЕ подтверждения
+            # оплаты остатка (см. /api/invoice/{id} ниже), а через провайдера
+            # выставим счёт только на остаток.
+            balance_credit = round(min(user.balance, price_rub), 2) if price_rub > 0 else 0.0
+            remaining_rub = round(price_rub - balance_credit)
+
+            if remaining_rub <= 0:
+                # Баланс успел стать достаточным между загрузкой страницы и
+                # нажатием кнопки — просто выдаём полностью с баланса.
+                await adjust_balance(session, user, -price_rub)
+                try:
+                    subscription_url = await _grant_subscription(
+                        session, tg_user["id"], tg_user.get("username"), plan_code, plan["days"]
+                    )
+                    if extra_qty:
+                        await _grant_extra_devices(session, tg_user["id"], tg_user.get("username"), extra_qty)
+                except VpnProviderError as e:
+                    await adjust_balance(session, user, price_rub)  # откатываем списание
+                    raise ApiError(
+                        "Не удалось выдать доступ: ошибка связи с VPN-панелью. Средства не списаны", status=502
+                    ) from e
+                if discount > 0:
+                    await consume_discount_use(session, user)
+                return web.json_response({"status": "granted", "subscription_url": subscription_url})
+
             try:
                 invoice = await platega_client.create_invoice(
-                    amount_rub=price_rub,
+                    amount_rub=remaining_rub,
                     comment=f"{config.vpn_name}: подписка {plan['title']}{devices_comment}",
                     order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
                     user_id=user.tg_id,
@@ -467,14 +495,15 @@ async def purchase(request: web.Request) -> web.Response:
                 plan_code=plan_code,
                 invoice_id=str(invoice["invoice_id"]),
                 pay_url=invoice["pay_url"],
-                amount=price_rub,
+                amount=remaining_rub,
                 purpose="subscription",
                 provider="platega",
                 currency="RUB",
                 discount_percent=discount,
                 quantity=extra_qty or None,
+                balance_credit=balance_credit,
             )
-            amount, currency = price_rub, "RUB"
+            amount, currency = remaining_rub, "RUB"
         else:
             invoice = await cryptopay_client.create_invoice(
                 amount_usdt=price_usdt,
@@ -503,6 +532,7 @@ async def purchase(request: web.Request) -> web.Response:
             "pay_url": invoice["pay_url"],
             "amount": amount,
             "currency": currency,
+            "balance_credit": balance_credit,
         }
     )
 
@@ -559,9 +589,15 @@ async def invoice_status(request: web.Request) -> web.Response:
                 status=502,
             ) from e
 
-        if local_invoice.discount_percent > 0:
+        if local_invoice.discount_percent > 0 or local_invoice.balance_credit > 0:
             user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
-            await consume_discount_use(session, user)
+            if local_invoice.discount_percent > 0:
+                await consume_discount_use(session, user)
+            if local_invoice.balance_credit > 0:
+                # Списываем ровно после успешной выдачи доступа, не раньше —
+                # min() на случай, если баланс уменьшился с момента создания
+                # счёта другой покупкой.
+                await adjust_balance(session, user, -min(local_invoice.balance_credit, user.balance))
         await mark_invoice_paid(session, local_invoice)
 
     return web.json_response({"status": "paid", "subscription_url": subscription_url})

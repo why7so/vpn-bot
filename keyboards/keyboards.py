@@ -132,6 +132,7 @@ def payment_method_kb(
     balance_enough: bool,
     balance_label: str,
     is_free: bool = False,
+    platega_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows = []
     if is_free:
@@ -148,8 +149,9 @@ def payment_method_kb(
     rows.append(
         [InlineKeyboardButton(text="Крипта (CryptoBot)", callback_data=f"paymethod:{plan_code}:cryptobot")]
     )
+    platega_text = f"СБП (Platega) — {platega_label}" if platega_label else "СБП (Platega)"
     rows.append(
-        [InlineKeyboardButton(text="СБП (Platega)", callback_data=f"paymethod:{plan_code}:platega")]
+        [InlineKeyboardButton(text=platega_text, callback_data=f"paymethod:{plan_code}:platega")]
     )
     rows.append([InlineKeyboardButton(text="Назад", callback_data="buy")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

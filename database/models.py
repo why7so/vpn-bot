@@ -71,6 +71,11 @@ class Invoice(Base):
     amount: Mapped[float] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String, default="USDT")  # USDT | RUB
     discount_percent: Mapped[float] = mapped_column(Float, default=0.0)  # скидка, применённая к этому счёту
+    # Сумма, которая автоматически спишется с баланса пользователя в момент
+    # подтверждения оплаты этого счёта (доплата остатка через провайдера +
+    # покрытие части цены балансом, чтобы не пополнять баланс отдельно).
+    # 0 — баланс к этому счёту не примешивался.
+    balance_credit: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String, default="active")  # active | paid | expired
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
