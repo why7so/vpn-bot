@@ -186,10 +186,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             promo_text = "Произошла непредвиденная ошибка при активации промокода. Попробуйте позже."
 
     # Реф. ссылка вида https://t.me/<bot>?start=ref_<TG_ID>. Если это первый
-    # /start у пользователя (в базе его ещё нет) — засчитываем реферала и
-    # начисляем пригласившему бонус. Молча игнорируем некорректный payload
-    # (битый TG_ID, самоприглашение, несуществующий реферер) — /start не
-    # должен падать из-за плохой ссылки.
+    # /start у пользователя (в базе его ещё нет) — засчитываем реферала:
+    # рефереру начисляется referral_bonus_rub, самому приглашённому —
+    # referral_invitee_bonus_rub (см. register_referral_if_new). Молча
+    # игнорируем некорректный payload (битый TG_ID, самоприглашение,
+    # несуществующий реферер) — /start не должен падать из-за плохой ссылки.
+    referral_text = None
     if payload.startswith("ref_"):
         try:
             referrer_tg_id = int(payload[len("ref_"):])
@@ -199,6 +201,11 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             async with async_session() as session:
                 credited = await register_referral_if_new(session, message.from_user.id, referrer_tg_id)
             if credited:
+                if config.referral_invitee_bonus_rub > 0:
+                    referral_text = (
+                        f"🎉 Вы перешли по реферальной ссылке — "
+                        f"на баланс начислено {config.referral_invitee_bonus_rub:.0f}₽!"
+                    )
                 try:
                     await message.bot.send_message(
                         referrer_tg_id,
@@ -236,7 +243,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     # (Telegram.WebApp.showPopup) сразу после открытия. Если мини-приложение
     # не настроено (нет WEBAPP_URL) — некуда показывать popup, тогда как
     # раньше отправляем текст обычным сообщением.
-    combined_text = "\n\n".join(t for t in (promo_text, trial_text) if t) or None
+    combined_text = "\n\n".join(t for t in (promo_text, referral_text, trial_text) if t) or None
     if combined_text and config.webapp_url:
         keyboard = promo_result_kb(_shorten_for_popup(combined_text))
     else:

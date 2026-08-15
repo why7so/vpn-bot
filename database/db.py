@@ -143,9 +143,10 @@ async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
 
 async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_tg_id: int) -> bool:
     """Реф. ссылка вида ?start=ref_<TG_ID>: если пользователь tg_id ещё не
-    существует в базе — создаёт его с привязкой referred_by и сразу
-    начисляет рефереру бонус config.referral_bonus_rub. Возвращает True,
-    если бонус реально начислен.
+    существует в базе — создаёт его с привязкой referred_by, сразу начисляет
+    рефереру бонус config.referral_bonus_rub и самому приглашённому —
+    config.referral_invitee_bonus_rub. Возвращает True, если бонусы реально
+    начислены.
 
     Важно: создаёт пользователя ЗДЕСЬ (не в get_or_create_user), чтобы
     гарантированно поймать момент "это первый /start", а не полагаться на
@@ -165,7 +166,7 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     if referrer is None:
         return False  # реферер с таким tg_id не найден — ссылка невалидна
 
-    user = User(tg_id=tg_id, referred_by=referrer_tg_id)
+    user = User(tg_id=tg_id, referred_by=referrer_tg_id, balance=round(config.referral_invitee_bonus_rub, 2))
     session.add(user)
     referrer.balance = round(referrer.balance + config.referral_bonus_rub, 2)
     await session.commit()
