@@ -1,9 +1,10 @@
 import datetime as dt
 import uuid
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQuery,
@@ -20,6 +21,7 @@ from database.db import (
     all_promo_codes,
     async_session,
     create_promo_code,
+    delete_user_completely,
     effective_device_limit,
     get_or_create_user,
     get_plans,
@@ -176,6 +178,70 @@ async def set_vpn_link(message: Message) -> None:
         f"TG ID: <code>{user.tg_id}</code>\n"
         f"Ссылка: <code>{sub.subscription_url}</code>"
     )
+
+
+@router.message(Command("reset_account"))
+async def reset_account(message: Message) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()[1:]
+    if len(parts) < 1:
+        await message.answer(
+            "Формат: <code>/reset_account ИДЕНТИФИКАТОР</code>\n"
+            "ИДЕНТИФИКАТОР — UUID пользователя (см. /user_info), TG_ID или @username.\n\n"
+            "⚠️ Полностью удаляет пользователя и все его данные (подписку, счета, "
+            "промокоды, токены входа) — необратимо. После этого он снова "
+            "считается новым: получит триал/реф.бонус заново на первом /start."
+        )
+        return
+
+    async with async_session() as session:
+        user, error = await _resolve_target_user(session, parts[0])
+        if error:
+            await message.answer(error)
+            return
+
+    username_line = f"Username: @{user.username}\n" if user.username else ""
+    await message.answer(
+        f"⚠️ Точно удалить пользователя безвозвратно?\n\n"
+        f"UUID: <code>{user.id}</code>\n"
+        f"TG ID: <code>{user.tg_id}</code>\n"
+        f"{username_line}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"reset_confirm:{user.id}"),
+                    InlineKeyboardButton(text="❌ Отмена", callback_data="reset_cancel"),
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("reset_confirm:"))
+async def reset_account_confirm(callback: CallbackQuery) -> None:
+    if not _is_admin(callback.from_user.id):
+        return
+
+    user_id_raw = callback.data.split(":", 1)[1]
+    async with async_session() as session:
+        user = await get_user_by_id(session, uuid.UUID(user_id_raw))
+        if user is None:
+            await callback.message.edit_text("Пользователь уже удалён или не найден.")
+            await callback.answer()
+            return
+        tg_id = user.tg_id
+        await delete_user_completely(session, user)
+
+    await callback.message.edit_text(f"✅ Пользователь TG_ID <code>{tg_id}</code> полностью удалён.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "reset_cancel")
+async def reset_account_cancel(callback: CallbackQuery) -> None:
+    await callback.message.edit_text("Отменено, ничего не удалено.")
+    await callback.answer()
 
 
 @router.message(Command("stats"))
@@ -672,6 +738,7 @@ CMD_LIST_TEXT = (
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
     "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"
+    "/reset_account UUID_или_TG_ID_или_@username — ПОЛНОСТЬЮ удалить пользователя (с подтверждением)\n"
     "/plans — список тарифов со статусом и ценой\n"
     "/plan_disable КОД — скрыть тариф из продажи\n"
     "/plan_enable КОД — включить тариф\n"

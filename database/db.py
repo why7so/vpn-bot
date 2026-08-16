@@ -3,7 +3,7 @@ import logging
 import secrets
 import uuid
 
-from sqlalchemy import func, inspect, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import PLANS, config
@@ -189,6 +189,25 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     referrer.balance = round(referrer.balance + config.referral_bonus_rub, 2)
     await session.commit()
     return True
+
+
+async def delete_user_completely(session: AsyncSession, user: User) -> None:
+    """Полная чистка аккаунта: удаляет пользователя и вообще все связанные с
+    ним записи (подписка, счета, использованные промокоды, токены входа,
+    браузерные сессии). Необратимо — после этого tg_id снова считается
+    "новым" пользователем: заново получит триал на первом /start, реф.бонус
+    по чужой ссылке, и любой promo сможет погасить заново.
+
+    Порядок удаления важен — сперва дочерние таблицы (FK на users.id/tg_id),
+    потом сам User, иначе БД с включённым контролем внешних ключей откажет.
+    """
+    await session.execute(delete(PromoRedemption).where(PromoRedemption.user_id == user.id))
+    await session.execute(delete(Invoice).where(Invoice.user_id == user.id))
+    await session.execute(delete(Subscription).where(Subscription.user_id == user.id))
+    await session.execute(delete(LoginToken).where(LoginToken.tg_id == user.tg_id))
+    await session.execute(delete(BrowserSession).where(BrowserSession.tg_id == user.tg_id))
+    await session.execute(delete(User).where(User.id == user.id))
+    await session.commit()
 
 
 async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | None) -> User:
