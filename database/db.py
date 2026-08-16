@@ -44,6 +44,7 @@ async def init_db() -> None:
         await _ensure_device_columns(conn)
         await _ensure_referral_columns(conn)
         await _ensure_invoice_balance_credit_column(conn)
+        await _ensure_user_first_name_column(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -150,6 +151,19 @@ async def _ensure_invoice_balance_credit_column(conn) -> None:
     await conn.run_sync(_add_missing_columns)
 
 
+async def _ensure_user_first_name_column(conn) -> None:
+    """Сам-миграция: users.first_name появился вместе с /leaderboard (там
+    показываем отображаемое имя из Telegram, а не @username) — добавляем
+    колонку в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        users_columns = _table_columns(sync_conn, "users")
+        if "first_name" not in users_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN first_name VARCHAR")
+
+    await conn.run_sync(_add_missing_columns)
+
+
 async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     result = await session.execute(select(func.count()).select_from(User).where(User.referred_by == tg_id))
     return result.scalar_one()
@@ -216,19 +230,28 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     return True
 
 
-async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | None) -> User:
+async def get_or_create_user(
+    session: AsyncSession, tg_id: int, username: str | None, first_name: str | None = None
+) -> User:
     result = await session.execute(select(User).where(User.tg_id == tg_id))
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(tg_id=tg_id, username=username)
+        user = User(tg_id=tg_id, username=username, first_name=first_name)
         session.add(user)
         await session.commit()
         await session.refresh(user)
-    elif username and user.username != username:
-        # держим username свежим, чтобы поиск по нему (напр. /promo_send) не устаревал
-        user.username = username
-        await session.commit()
-        await session.refresh(user)
+    else:
+        changed = False
+        if username and user.username != username:
+            # держим username свежим, чтобы поиск по нему (напр. /promo_send) не устаревал
+            user.username = username
+            changed = True
+        if first_name and user.first_name != first_name:
+            user.first_name = first_name
+            changed = True
+        if changed:
+            await session.commit()
+            await session.refresh(user)
     return user
 
 

@@ -1,5 +1,6 @@
 import datetime as dt
 import logging
+from html import escape as html_escape
 from pathlib import Path
 
 from aiogram import Bot, F, Router
@@ -103,8 +104,8 @@ def _profile_text(user, sub) -> str:
     )
 
 
-async def _render_profile(session, tg_id: int, username: str | None):
-    user = await get_or_create_user(session, tg_id, username)
+async def _render_profile(session, tg_id: int, username: str | None, first_name: str | None = None):
+    user = await get_or_create_user(session, tg_id, username, first_name)
     sub = await get_subscription(session, user.id)
     return user, sub
 
@@ -235,7 +236,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             logger.exception("Unexpected error while granting trial for tg_id=%s", message.from_user.id)
 
     async with async_session() as session:
-        user, sub = await _render_profile(session, message.from_user.id, message.from_user.username)
+        user, sub = await _render_profile(session, message.from_user.id, message.from_user.username, message.from_user.first_name)
 
     # Результат активации промокода теперь не отправляется отдельным
     # сообщением в чат — вместо этого он передаётся мини-приложению через
@@ -293,7 +294,7 @@ async def weblogin_button(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "back_main")
 async def back_main(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     await _edit_message(callback, _profile_text(user, sub), reply_markup=main_menu_kb())
     await callback.answer()
@@ -346,7 +347,7 @@ async def leaderboard(message: Message) -> None:
     lines = ["🏆 <b>Топ-10 по рефералам</b>", ""]
     for i, (user, count) in enumerate(top, start=1):
         place = _MEDALS.get(i, f"{i}.")
-        name = f"@{user.username}" if user.username else f"id{user.tg_id}"
+        name = html_escape(user.first_name) if user.first_name else f"id{user.tg_id}"
         lines.append(f"{place} {name} — {count}")
 
     lines.append("")
@@ -376,7 +377,7 @@ async def show_plans(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "connect_device")
 async def connect_device(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     if sub is None or not sub.subscription_url:
         text = "У вас пока нет активной подписки — сначала оформите её через «Тарифы и оплата»."
@@ -596,7 +597,7 @@ def _extra_device_price(qty: int) -> tuple[float, float]:
 @router.callback_query(F.data == "devices")
 async def show_devices(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     limit = effective_device_limit(user)
     limit_line = "без ограничений" if limit <= 0 else f"{limit} устройств"

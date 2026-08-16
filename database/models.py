@@ -21,6 +21,10 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Отображаемое имя из Telegram (message.from_user.first_name /
+    # tg_user["first_name"]) — используется там, где нужен "человеческий" ник,
+    # а не @username (который у многих не задан). См. /leaderboard.
+    first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # Идентификатор клиента у VPN-провайдера (сейчас — заглушка/будущий
     # мастер-сервер). Имя колонки в БД оставлено как есть ради совместимости
     # с уже существующими базами.

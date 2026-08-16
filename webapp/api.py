@@ -195,7 +195,7 @@ async def logout(request: web.Request) -> web.Response:
 async def get_me(request: web.Request) -> web.Response:
     tg_user = await _tg_user_from_request(request)
     async with async_session() as session:
-        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
+        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"), tg_user.get("first_name"))
         sub = await get_subscription(session, user.id)
         await get_effective_discount(session, user)  # почистит истёкшую скидку, если есть
     return web.json_response(_profile_json(user, sub))
@@ -205,7 +205,7 @@ async def get_me(request: web.Request) -> web.Response:
 async def get_devices(request: web.Request) -> web.Response:
     tg_user = await _tg_user_from_request(request)
     async with async_session() as session:
-        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
+        user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"), tg_user.get("first_name"))
         limit = effective_device_limit(user)
 
     limit_line = "без ограничений" if limit <= 0 else f"максимум {limit} устройств одновременно"
