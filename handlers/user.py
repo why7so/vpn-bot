@@ -28,6 +28,7 @@ from database.db import (
     mark_invoice_paid,
     redeem_promo_code,
     register_referral_if_new,
+    remaining_device_capacity,
     set_login_token_message,
     set_user_discount,
     set_vpn_client_uuid,
@@ -624,6 +625,15 @@ async def choose_device_qty(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
 
+    capacity = remaining_device_capacity(user)
+    if capacity is not None and qty > capacity:
+        await callback.answer(
+            f"Нельзя купить {qty} — доступно ещё {capacity} из {config.max_device_limit} "
+            "(это потолок протокола на одну ссылку-подписку).",
+            show_alert=True,
+        )
+        return
+
     price_usdt, price_rub = _extra_device_price(qty)
     balance_enough = user.balance >= price_rub
 
@@ -665,6 +675,16 @@ async def choose_device_payment(callback: CallbackQuery) -> None:
         return
 
     price_usdt, price_rub = _extra_device_price(qty)
+
+    async with async_session() as session:
+        capacity_user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+    capacity = remaining_device_capacity(capacity_user)
+    if capacity is not None and qty > capacity:
+        await callback.answer(
+            f"Нельзя купить {qty} — доступно ещё {capacity} из {config.max_device_limit}.",
+            show_alert=True,
+        )
+        return
 
     if provider == "balance":
         async with async_session() as session:

@@ -30,6 +30,11 @@ class VpnProviderClient:
         подключён, параметр принимается, но никак не используется — просто
         выдаётся фиктивная подписка (subscription_url-заглушка), ничего
         никуда не отправляя.
+
+        В протоколе мастер-сервера этот параметр называется MAX_DEVICE —
+        именно под этим именем его нужно будет положить в payload запроса,
+        когда интеграция будет готова, например:
+            payload = {..., "MAX_DEVICE": device_limit}
         """
         sub_id = secrets.token_hex(8)
         email = self.build_email(tg_id)
@@ -43,7 +48,11 @@ class VpnProviderClient:
     async def update_device_limit(self, tg_id: int, device_limit: int) -> None:
         """ЗАГЛУШКА. Обновляет лимит устройств уже созданного клиента, не
         дожидаясь следующего продления подписки (напр. сразу после покупки
-        доп. устройств). Пока мастер-сервер не подключён — ничего не делает."""
+        доп. устройств). Пока мастер-сервер не подключён — ничего не делает.
+
+        Как и в ensure_client — поле в протоколе мастер-сервера называется
+        MAX_DEVICE, например: payload = {"MAX_DEVICE": device_limit}.
+        """
         return None
 
     async def disable_by_email(self, email: str) -> None:

@@ -291,6 +291,17 @@ def effective_device_limit(user: User) -> int:
     return config.device_limit + user.extra_devices
 
 
+def remaining_device_capacity(user: User) -> int | None:
+    """Сколько ещё устройств можно докупить, не превысив config.max_device_limit
+    (реальный потолок протокола/VPN-панели на одну ссылку-подписку).
+    None — потолка нет (max_device_limit <= 0), докупать можно сколько угодно.
+    Иначе — неотрицательное число (может быть 0, если потолок уже достигнут
+    или превышен раньше добавленным вручную лимитом)."""
+    if config.max_device_limit <= 0:
+        return None
+    return max(0, config.max_device_limit - effective_device_limit(user))
+
+
 async def add_extra_devices(session: AsyncSession, user: User, count: int) -> User:
     """Начисляет пользователю дополнительные устройства (доп. услуга)."""
     user.extra_devices += count

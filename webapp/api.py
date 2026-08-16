@@ -26,6 +26,7 @@ from database.db import (
     consume_discount_use,
     create_invoice,
     effective_device_limit,
+    remaining_device_capacity,
     exchange_login_token,
     get_browser_session,
     get_effective_discount,
@@ -208,6 +209,7 @@ async def get_devices(request: web.Request) -> web.Response:
         limit = effective_device_limit(user)
 
     limit_line = "без ограничений" if limit <= 0 else f"максимум {limit} устройств одновременно"
+    capacity = remaining_device_capacity(user)
     return web.json_response(
         {
             "device_limit": limit,
@@ -216,6 +218,8 @@ async def get_devices(request: web.Request) -> web.Response:
             "price_rub": config.extra_device_price_rub,
             "price_usdt": config.extra_device_price_usdt,
             "qty_presets": DEVICE_QTY_PRESETS,
+            "max_device_limit": config.max_device_limit if config.max_device_limit > 0 else None,
+            "remaining_capacity": capacity,
             "message": (
                 f"У вас {limit_line} по одной ссылке-подписке. "
                 "Нужно больше — докупите устройства ниже."
@@ -258,6 +262,13 @@ async def purchase_devices(request: web.Request) -> web.Response:
 
     async with async_session() as session:
         user = await get_or_create_user(session, tg_user["id"], tg_user.get("username"))
+
+        capacity = remaining_device_capacity(user)
+        if capacity is not None and qty > capacity:
+            raise ApiError(
+                f"Нельзя купить {qty} устройств — доступно ещё {capacity} из {config.max_device_limit} "
+                "(потолок протокола на одну ссылку-подписку)."
+            )
 
         if provider == "balance":
             if user.balance < price_rub:
@@ -410,6 +421,13 @@ async def purchase(request: web.Request) -> web.Response:
         if extra_qty:
             price_usdt = round(price_usdt + config.extra_device_price_usdt * extra_qty, 2)
             price_rub = round(price_rub + config.extra_device_price_rub * extra_qty)
+
+            capacity = remaining_device_capacity(user)
+            if capacity is not None and extra_qty > capacity:
+                raise ApiError(
+                    f"Нельзя докупить {extra_qty} устройств — доступно ещё {capacity} из "
+                    f"{config.max_device_limit} (потолок протокола на одну ссылку-подписку)."
+                )
 
         if provider == "free":
             if price_rub > 0:
