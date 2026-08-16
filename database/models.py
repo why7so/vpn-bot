@@ -21,6 +21,10 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Отображаемое имя из Telegram (message.from_user.first_name /
+    # tg_user["first_name"]) — используется там, где нужен "человеческий" ник,
+    # а не @username (который у многих не задан). См. /leaderboard.
+    first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # Идентификатор клиента у VPN-провайдера (сейчас — заглушка/будущий
     # мастер-сервер). Имя колонки в БД оставлено как есть ради совместимости
     # с уже существующими базами.
@@ -75,6 +79,11 @@ class Invoice(Base):
     amount: Mapped[float] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String, default="USDT")  # USDT | RUB
     discount_percent: Mapped[float] = mapped_column(Float, default=0.0)  # скидка, применённая к этому счёту
+    # Сумма, которая автоматически спишется с баланса пользователя в момент
+    # подтверждения оплаты этого счёта (доплата остатка через провайдера +
+    # покрытие части цены балансом, чтобы не пополнять баланс отдельно).
+    # 0 — баланс к этому счёту не примешивался.
+    balance_credit: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String, default="active")  # active | paid | expired
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
@@ -179,3 +188,16 @@ class BrowserSession(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Setting(Base):
+    """Небольшой generic key-value стор для одиночных глобальных настроек,
+    под которые не стоит заводить отдельную таблицу/колонку. Сейчас
+    используется для точки отсчёта /leaderboard (leaderboard_reset_at) —
+    см. handlers/admin.py: /leaderboard_reset."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)

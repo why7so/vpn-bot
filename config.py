@@ -39,12 +39,20 @@ class Config:
     # Максимальное число одновременных подключений (устройств) на одного клиента.
     # Используется провайдером VPN-доступа (см. services/vpn_provider.py).
     device_limit: int = int(os.getenv("DEVICE_LIMIT", "3"))
+    # Жёсткий потолок на ИТОГОВЫЙ лимит устройств (базовый + докупленные) по
+    # одной ссылке-подписке — ограничение самого протокола/VPN-панели: выше
+    # него клиент технически не может иметь больше одновременных подключений.
+    # 0 = без потолка (не рекомендуется — тогда докупить устройства можно
+    # неограниченно, даже сверх того, что протокол реально способен обслужить).
+    max_device_limit: int = int(os.getenv("MAX_DEVICE_LIMIT", "60"))
     # Цена одного дополнительного устройства сверх лимита (доп. услуга,
     # см. handlers/user.py: "devices"). Действует бессрочно, пока активна подписка.
     extra_device_price_rub: float = float(os.getenv("EXTRA_DEVICE_PRICE_RUB", "40"))
     extra_device_price_usdt: float = float(os.getenv("EXTRA_DEVICE_PRICE_USDT", "0.45"))
     referral_bonus_rub: float = float(os.getenv("REFERRAL_BONUS_RUB", "15"))
-    referral_invitee_bonus_rub: float = float(os.getenv("REFERRAL_INVITEE_BONUS_RUB", "50"))
+    # Бонус самому приглашённому другу — начисляется один раз при первом
+    # /start по реф. ссылке, независимо от бонуса рефереру выше.
+    referral_invitee_bonus_rub: float = float(os.getenv("REFERRAL_INVITEE_BONUS_RUB", "49"))
     trial_days: int = int(os.getenv("TRIAL_DAYS", "3"))  # 0 = отключить бесплатный пробный период
 
     crypto_pay_token: str = os.getenv("CRYPTO_PAY_TOKEN", "")

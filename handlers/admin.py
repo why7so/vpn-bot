@@ -1,4 +1,6 @@
+import asyncio
 import datetime as dt
+import logging
 import uuid
 
 from aiogram import Bot, F, Router
@@ -18,6 +20,10 @@ from database.db import (
     PromoError,
     adjust_balance,
     all_active_subscriptions,
+    count_all_users,
+    count_paid_users,
+    list_users_missing_first_name,
+    set_user_first_name,
     all_promo_codes,
     async_session,
     create_promo_code,
@@ -28,10 +34,13 @@ from database.db import (
     get_promo_by_code,
     get_recent_invoices,
     get_referral_count,
+    get_setting,
     get_subscription,
     get_user_by_id,
     get_user_by_tg_id,
     get_user_by_username,
+    LEADERBOARD_RESET_SETTING_KEY,
+    set_setting,
     reset_plan_price,
     set_plan_enabled,
     set_plan_price,
@@ -40,6 +49,7 @@ from database.db import (
 )
 
 router = Router(name="admin")
+logger = logging.getLogger(__name__)
 
 PROMO_HELP = (
     "Формат:\n"
@@ -251,13 +261,106 @@ async def stats(message: Message) -> None:
 
     async with async_session() as session:
         subs = await all_active_subscriptions(session)
+        total_users = await count_all_users(session)
+        paid_users = await count_paid_users(session)
 
     now = dt.datetime.utcnow()
     active = sum(1 for s in subs if s.expires_at > now)
     expired = len(subs) - active
 
     await message.answer(
-        f"📊 Статистика\n\nВсего подписок: {len(subs)}\nАктивных: {active}\nИстёкших: {expired}"
+        "📊 Статистика\n\n"
+        f"Всего пользователей в боте: {total_users}\n"
+        f"Купили подписку (реальные лиды, не пробный период): {paid_users}\n\n"
+        f"Всего подписок: {len(subs)}\nАктивных: {active}\nИстёкших: {expired}"
+    )
+
+
+@router.message(Command("backfill_names"))
+async def backfill_names(message: Message, bot: Bot) -> None:
+    """Разовая утилита: дозаполняет first_name пользователям, у которых он
+    пустой (обычно те, кто зашёл в бота до того, как first_name стали
+    сохранять для их конкретного пути — например, переход по реф. ссылке до
+    соответствующего фикса). Идём в Telegram get_chat() по каждому tg_id —
+    работает, только если у бота уже есть открытый чат с пользователем."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    async with async_session() as session:
+        users = await list_users_missing_first_name(session)
+
+    if not users:
+        await message.answer("Все пользователи уже с именем — нечего дозаполнять.")
+        return
+
+    status = await message.answer(f"Дозаполняю имена: 0/{len(users)}…")
+    updated = 0
+    failed = 0
+    for i, user in enumerate(users, start=1):
+        try:
+            chat = await bot.get_chat(user.tg_id)
+            first_name = getattr(chat, "first_name", None)
+            if first_name:
+                async with async_session() as session:
+                    fresh = await get_user_by_tg_id(session, user.tg_id)
+                    if fresh is not None:
+                        await set_user_first_name(session, fresh, first_name)
+                updated += 1
+        except Exception:
+            logger.exception("Не удалось получить имя для tg_id=%s при бэкфилле", user.tg_id)
+            failed += 1
+        if i % 15 == 0:
+            await asyncio.sleep(1)  # не превышаем rate limit Telegram Bot API
+            try:
+                await status.edit_text(f"Дозаполняю имена: {i}/{len(users)}…")
+            except Exception:
+                pass
+
+    await message.answer(
+        f"✅ Готово: обновлено {updated} из {len(users)}"
+        + (f", не удалось получить имя для {failed} (бот не писал им раньше)" if failed else "")
+    )
+
+
+@router.message(Command("leaderboard_reset"))
+async def leaderboard_reset(message: Message) -> None:
+    """Обнуляет счётчик /leaderboard для конкурсов вида 'кто за 30 минут
+    пригласит больше всего людей' — НЕ удаляет реальных рефералов и не
+    трогает уже начисленные бонусы, а просто задаёт точку отсчёта: дальше
+    /leaderboard считает только тех, кто присоединился после неё.
+
+    /leaderboard_reset — начать отсчёт заново (с текущего момента)
+    /leaderboard_reset off — вернуть счёт за всё время (снять точку отсчёта)
+    /leaderboard_reset status — посмотреть текущую точку отсчёта, если есть
+    """
+    if not _is_admin(message.from_user.id):
+        return
+
+    arg = (message.text or "").split(maxsplit=1)
+    arg = arg[1].strip().lower() if len(arg) > 1 else ""
+
+    async with async_session() as session:
+        if arg == "off":
+            await set_setting(session, LEADERBOARD_RESET_SETTING_KEY, None)
+            await message.answer("✅ Точка отсчёта снята — /leaderboard снова считает за всё время.")
+            return
+
+        if arg == "status":
+            current = await get_setting(session, LEADERBOARD_RESET_SETTING_KEY)
+            if current is None:
+                await message.answer("Точка отсчёта не задана — /leaderboard считает за всё время.")
+            else:
+                since = dt.datetime.fromisoformat(current)
+                await message.answer(f"Точка отсчёта: {since.strftime('%d.%m.%Y %H:%M')} UTC")
+            return
+
+        now = dt.datetime.utcnow()
+        await set_setting(session, LEADERBOARD_RESET_SETTING_KEY, now.isoformat())
+
+    await message.answer(
+        f"🔄 Готово! /leaderboard теперь считает рефералов с {now.strftime('%d.%m %H:%M')} UTC — "
+        "удобно для конкурса на время (например, 'кто за 30 минут пригласит больше всего').\n\n"
+        "Когда захотите вернуть счёт за всё время — <code>/leaderboard_reset off</code>."
     )
 
 
@@ -732,9 +835,12 @@ async def add_balance(message: Message) -> None:
 CMD_LIST_TEXT = (
     "📋 <b>Список команд</b>\n\n"
     "<b>Пользователь</b>\n"
-    "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n\n"
+    "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n"
+    "/leaderboard — топ-10 по числу приглашённых рефералов\n\n"
     "<b>Админ</b>\n"
-    "/stats — статистика подписок (активные/истёкшие)\n"
+    "/stats — статистика: пользователи, реальные лиды, подписки\n"
+    "/backfill_names — дозаполнить имена пользователям, у которых их ещё нет\n"
+    "/leaderboard_reset [off|status] — обнулить/снять/посмотреть точку отсчёта конкурса по рефералам\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
     "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"

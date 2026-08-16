@@ -1,9 +1,10 @@
 import datetime as dt
 import logging
+from html import escape as html_escape
 from pathlib import Path
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import DEVICE_QTY_PRESETS, build_subscription_url, config
@@ -23,11 +24,15 @@ from database.db import (
     get_plan,
     get_plans,
     get_referral_count,
+    get_setting,
     get_subscription,
+    get_top_referrers,
     get_user_by_tg_id,
+    LEADERBOARD_RESET_SETTING_KEY,
     mark_invoice_paid,
     redeem_promo_code,
     register_referral_if_new,
+    remaining_device_capacity,
     set_login_token_message,
     set_user_discount,
     set_vpn_client_uuid,
@@ -102,8 +107,8 @@ def _profile_text(user, sub) -> str:
     )
 
 
-async def _render_profile(session, tg_id: int, username: str | None):
-    user = await get_or_create_user(session, tg_id, username)
+async def _render_profile(session, tg_id: int, username: str | None, first_name: str | None = None):
+    user = await get_or_create_user(session, tg_id, username, first_name)
     sub = await get_subscription(session, user.id)
     return user, sub
 
@@ -200,7 +205,9 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             referrer_tg_id = None
         if referrer_tg_id is not None:
             async with async_session() as session:
-                credited = await register_referral_if_new(session, message.from_user.id, referrer_tg_id)
+                credited = await register_referral_if_new(
+                    session, message.from_user.id, referrer_tg_id, message.from_user.first_name
+                )
             if credited:
                 if config.referral_invitee_bonus_rub > 0:
                     referral_text = (
@@ -236,7 +243,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             logger.exception("Unexpected error while granting trial for tg_id=%s", message.from_user.id)
 
     async with async_session() as session:
-        user, sub = await _render_profile(session, message.from_user.id, message.from_user.username)
+        user, sub = await _render_profile(session, message.from_user.id, message.from_user.username, message.from_user.first_name)
 
     # Результат активации промокода теперь не отправляется отдельным
     # сообщением в чат — вместо этого он передаётся мини-приложению через
@@ -294,7 +301,7 @@ async def weblogin_button(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "back_main")
 async def back_main(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     await _edit_message(callback, _profile_text(user, sub), reply_markup=main_menu_kb())
     await callback.answer()
@@ -318,12 +325,47 @@ async def referral_menu(callback: CallbackQuery) -> None:
     text = (
         "🎁 <b>Реферальная программа</b>\n\n"
         f"Приглашайте друзей — за каждого, кто впервые запустит бота по вашей "
-        f"ссылке, вам начислится {config.referral_bonus_rub:.0f}₽ на баланс.\n\n"
+        f"ссылке, вам начислится {config.referral_bonus_rub:.0f}₽ на баланс, а "
+        f"другу — {config.referral_invitee_bonus_rub:.0f}₽.\n\n"
         f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
         f"Приглашено: {count}"
     )
     await _edit_message(callback, text, reply_markup=back_main_kb())
     await callback.answer()
+
+
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+@router.message(Command("leaderboard"))
+async def leaderboard(message: Message) -> None:
+    """Топ-10 пользователей по числу приглашённых рефералов. Доступно всем —
+    не админ-команда. Если админ вызывал /leaderboard_reset — считаем только
+    рефералов, присоединившихся после этой точки (см. handlers/admin.py)."""
+    async with async_session() as session:
+        since_raw = await get_setting(session, LEADERBOARD_RESET_SETTING_KEY)
+        since = dt.datetime.fromisoformat(since_raw) if since_raw else None
+        top = await get_top_referrers(session, limit=10, since=since)
+        my_count = await get_referral_count(session, message.from_user.id, since=since)
+
+    header = "🏆 <b>Топ-10 по рефералам</b>"
+    if since is not None:
+        header += f"\nСчёт идёт с {since.strftime('%d.%m %H:%M')} UTC"
+
+    if not top:
+        await message.answer(f"{header}\n\nПока никто никого не пригласил — станьте первым!")
+        return
+
+    lines = [header, ""]
+    for i, (user, count) in enumerate(top, start=1):
+        place = _MEDALS.get(i, f"{i}.")
+        name = html_escape(user.first_name) if user.first_name else "Без имени"
+        lines.append(f"{place} {name} (id{user.tg_id}) — {count}")
+
+    lines.append("")
+    lines.append(f"Вы пригласили: {my_count}")
+
+    await message.answer("\n".join(lines))
 
 
 @router.callback_query(F.data == "support_stub")
@@ -347,7 +389,7 @@ async def show_plans(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "connect_device")
 async def connect_device(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, sub = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     if sub is None or not sub.subscription_url:
         text = "У вас пока нет активной подписки — сначала оформите её через «Тарифы и оплата»."
@@ -495,6 +537,16 @@ async def choose_plan(callback: CallbackQuery) -> None:
     is_free = price_rub <= 0
     balance_enough = (not is_free) and user.balance >= price_rub
 
+    # Если баланса не хватает на полную оплату, но что-то на нём есть —
+    # автоматически спишем эту часть, а через СБП попросим доплатить только
+    # остаток (не нужно отдельно пополнять баланс перед покупкой). Крипта
+    # (USDT) баланс не примешивает — валюты разные.
+    balance_credit = 0.0
+    platega_remaining_rub = price_rub
+    if not is_free and not balance_enough and user.balance > 0:
+        balance_credit = round(min(user.balance, price_rub), 2)
+        platega_remaining_rub = round(price_rub - balance_credit)
+
     price_lines = f"Крипта: {plan['price_usdt']} USDT · Рубли: {plan['price_rub']}₽"
     if discount > 0:
         price_lines = (
@@ -502,12 +554,26 @@ async def choose_plan(callback: CallbackQuery) -> None:
             f"<b>{price_usdt} USDT / {price_rub}₽</b> (скидка {discount:.0f}%)"
         )
 
+    balance_note = ""
+    if balance_credit > 0:
+        balance_note = (
+            f"При оплате через СБП спишется {balance_credit:.0f}₽ с баланса — "
+            f"доплатить: {platega_remaining_rub:.0f}₽\n"
+        )
+
     await _edit_message(callback, 
         f"Тариф: {plan['title']}\n"
         f"{price_lines}\n"
-        f"Ваш баланс: {user.balance:.0f} ₽\n\n"
+        f"Ваш баланс: {user.balance:.0f} ₽\n"
+        f"{balance_note}\n"
         + ("Скидка полностью покрывает стоимость 🎉" if is_free else "Выберите способ оплаты:"),
-        reply_markup=payment_method_kb(plan_code, balance_enough, f"{price_rub:.0f}₽", is_free=is_free),
+        reply_markup=payment_method_kb(
+            plan_code,
+            balance_enough,
+            f"{price_rub:.0f}₽",
+            is_free=is_free,
+            platega_label=(f"доплатить {platega_remaining_rub:.0f}₽" if balance_credit > 0 else None),
+        ),
     )
     await callback.answer()
 
@@ -545,7 +611,7 @@ def _extra_device_price(qty: int) -> tuple[float, float]:
 @router.callback_query(F.data == "devices")
 async def show_devices(callback: CallbackQuery) -> None:
     async with async_session() as session:
-        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username)
+        user, _ = await _render_profile(session, callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
 
     limit = effective_device_limit(user)
     limit_line = "без ограничений" if limit <= 0 else f"{limit} устройств"
@@ -573,6 +639,15 @@ async def choose_device_qty(callback: CallbackQuery) -> None:
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+
+    capacity = remaining_device_capacity(user)
+    if capacity is not None and qty > capacity:
+        await callback.answer(
+            f"Нельзя купить {qty} — доступно ещё {capacity} из {config.max_device_limit} "
+            "(это потолок протокола на одну ссылку-подписку).",
+            show_alert=True,
+        )
+        return
 
     price_usdt, price_rub = _extra_device_price(qty)
     balance_enough = user.balance >= price_rub
@@ -615,6 +690,16 @@ async def choose_device_payment(callback: CallbackQuery) -> None:
         return
 
     price_usdt, price_rub = _extra_device_price(qty)
+
+    async with async_session() as session:
+        capacity_user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+    capacity = remaining_device_capacity(capacity_user)
+    if capacity is not None and qty > capacity:
+        await callback.answer(
+            f"Нельзя купить {qty} — доступно ещё {capacity} из {config.max_device_limit}.",
+            show_alert=True,
+        )
+        return
 
     if provider == "balance":
         async with async_session() as session:
@@ -779,9 +864,45 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
 
         if provider == "platega":
+            # Автопримешивание баланса: если на балансе есть деньги (но не
+            # хватает на полную оплату — иначе выше сработал бы provider ==
+            # "balance"), спишем эту часть с баланса ПОСЛЕ подтверждения
+            # оплаты остатка (см. check_payment) — не сразу, чтобы деньги не
+            # "зависали" списанными, если счёт в Platega так и не оплатят.
+            balance_credit = round(min(user.balance, price_rub), 2) if price_rub > 0 else 0.0
+            remaining_rub = round(price_rub - balance_credit)
+
+            if remaining_rub <= 0:
+                # Между открытием экрана оплаты и нажатием кнопки баланс
+                # успел стать достаточным (например, пополнился) — просто
+                # выдаём доступ полностью с баланса, счёт провайдеру не нужен.
+                await adjust_balance(session, user, -price_rub)
+                try:
+                    subscription_url = await _grant_subscription(
+                        session, callback.from_user.id, callback.from_user.username, plan_code, plan["days"]
+                    )
+                except Exception:
+                    logger.exception("Error while granting fully-balance-covered subscription for tg_id=%s", callback.from_user.id)
+                    await adjust_balance(session, user, price_rub)  # откатываем списание
+                    await callback.answer(
+                        "Не удалось выдать доступ. Средства не списаны, попробуйте позже.",
+                        show_alert=True,
+                    )
+                    return
+                if discount > 0:
+                    await consume_discount_use(session, user)
+
+                await _edit_message(callback, 
+                    "✅ Оплата с баланса прошла успешно, доступ выдан!\n\n"
+                    f"Ваша ссылка-подписка (добавьте в клиент V2rayNG / Streisand / Hiddify):\n{subscription_url}",
+                    reply_markup=main_menu_kb(),
+                )
+                await callback.answer()
+                return
+
             try:
                 invoice = await platega_client.create_invoice(
-                    amount_rub=price_rub,
+                    amount_rub=remaining_rub,
                     comment=f"{config.vpn_name}: подписка {plan['title']}",
                     order_id=f"user{user.tg_id}-{plan_code}-{int(dt.datetime.utcnow().timestamp())}",
                     user_id=user.tg_id,
@@ -799,13 +920,16 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
                 plan_code=plan_code,
                 invoice_id=str(invoice["invoice_id"]),
                 pay_url=invoice["pay_url"],
-                amount=price_rub,
+                amount=remaining_rub,
                 purpose="subscription",
                 provider="platega",
                 currency="RUB",
                 discount_percent=discount,
+                balance_credit=balance_credit,
             )
-            amount_text = f"{price_rub} ₽"
+            amount_text = f"{remaining_rub} ₽"
+            if balance_credit > 0:
+                amount_text += f" (+ {balance_credit:.0f}₽ спишется с баланса после оплаты)"
         else:
             invoice = await cryptopay_client.create_invoice(
                 amount_usdt=price_usdt,
@@ -908,9 +1032,16 @@ async def check_payment(callback: CallbackQuery) -> None:
                 show_alert=True,
             )
             return
+
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         if local_invoice.discount_percent > 0:
-            user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
             await consume_discount_use(session, user)
+        if local_invoice.balance_credit > 0:
+            # Списываем ровно после успешной выдачи доступа, не раньше — чтобы
+            # деньги не пропадали, если выдача вдруг не удастся. min() на
+            # случай, если баланс уменьшился с момента создания счёта другой
+            # покупкой — не уходим в минус.
+            await adjust_balance(session, user, -min(local_invoice.balance_credit, user.balance))
         await mark_invoice_paid(session, local_invoice)
 
     await _edit_message(callback, 

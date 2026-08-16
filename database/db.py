@@ -15,6 +15,7 @@ from database.models import (
     PlanOverride,
     PromoCode,
     PromoRedemption,
+    Setting,
     Subscription,
     User,
 )
@@ -44,6 +45,8 @@ async def init_db() -> None:
         await _ensure_device_columns(conn)
         await _ensure_referral_columns(conn)
         await _ensure_sub_token_column(conn)
+        await _ensure_invoice_balance_credit_column(conn)
+        await _ensure_user_first_name_column(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -149,24 +152,109 @@ async def _ensure_sub_token_column(conn) -> None:
     await conn.run_sync(_add_missing_columns)
 
 
-async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
-    result = await session.execute(select(func.count()).select_from(User).where(User.referred_by == tg_id))
+async def _ensure_invoice_balance_credit_column(conn) -> None:
+    """Сам-миграция: invoices.balance_credit появился вместе с автопримешиванием
+    остатка баланса к оплате тарифа через провайдера — добавляем колонку
+    в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        invoices_columns = _table_columns(sync_conn, "invoices")
+        if "balance_credit" not in invoices_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN balance_credit FLOAT DEFAULT 0")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def _ensure_user_first_name_column(conn) -> None:
+    """Сам-миграция: users.first_name появился вместе с /leaderboard (там
+    показываем отображаемое имя из Telegram, а не @username) — добавляем
+    колонку в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        users_columns = _table_columns(sync_conn, "users")
+        if "first_name" not in users_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN first_name VARCHAR")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def get_setting(session: AsyncSession, key: str) -> str | None:
+    result = await session.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    return setting.value if setting is not None else None
+
+
+async def set_setting(session: AsyncSession, key: str, value: str | None) -> None:
+    result = await session.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        session.add(Setting(key=key, value=value))
+    else:
+        setting.value = value
+    await session.commit()
+
+
+LEADERBOARD_RESET_SETTING_KEY = "leaderboard_reset_at"
+
+
+async def get_referral_count(session: AsyncSession, tg_id: int, since: dt.datetime | None = None) -> int:
+    query = select(func.count()).select_from(User).where(User.referred_by == tg_id)
+    if since is not None:
+        query = query.where(User.created_at >= since)
+    result = await session.execute(query)
     return result.scalar_one()
 
 
-async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_tg_id: int) -> bool:
+async def get_top_referrers(
+    session: AsyncSession, limit: int = 10, since: dt.datetime | None = None
+) -> list[tuple[User, int]]:
+    """Топ рефереров по числу приглашённых (referred_by == их tg_id).
+    since — считать только тех, кто присоединился (User.created_at) не раньше
+    этого момента: так работает /leaderboard_reset — не удаляет историю
+    рефералов (это сломало бы уже начисленные бонусы), а просто "обнуляет
+    счётчик" для конкурсов, начиная считать заново с этой точки.
+    Возвращает список (User, count) отсортированный по убыванию count,
+    без пользователей с нулём приглашённых.
+    """
+    query = select(User.referred_by, func.count().label("cnt")).where(User.referred_by.is_not(None))
+    if since is not None:
+        query = query.where(User.created_at >= since)
+    referrer_counts = await session.execute(
+        query.group_by(User.referred_by).order_by(func.count().desc()).limit(limit)
+    )
+    rows = referrer_counts.all()
+    if not rows:
+        return []
+
+    referrer_ids = [r[0] for r in rows]
+    users_result = await session.execute(select(User).where(User.tg_id.in_(referrer_ids)))
+    users_by_tg_id = {u.tg_id: u for u in users_result.scalars().all()}
+
+    top: list[tuple[User, int]] = []
+    for referrer_tg_id, cnt in rows:
+        user = users_by_tg_id.get(referrer_tg_id)
+        if user is not None:
+            top.append((user, cnt))
+    return top
+
+
+async def register_referral_if_new(
+    session: AsyncSession, tg_id: int, referrer_tg_id: int, first_name: str | None = None
+) -> bool:
     """Реф. ссылка вида ?start=ref_<TG_ID>: если пользователь tg_id ещё не
-    существует в базе — создаёт его с привязкой referred_by, сразу начисляет
-    рефереру бонус config.referral_bonus_rub и самому приглашённому —
-    config.referral_invitee_bonus_rub. Возвращает True, если бонусы реально
-    начислены.
+    существует в базе — создаёт его с привязкой referred_by и сразу
+    начисляет бонусы ОБЕИМ сторонам: рефереру — config.referral_bonus_rub,
+    самому приглашённому другу — config.referral_invitee_bonus_rub (только
+    за то, что он не был раньше зарегистрирован в боте). Возвращает True,
+    если бонусы реально начислены.
 
     Важно: создаёт пользователя ЗДЕСЬ (не в get_or_create_user), чтобы
     гарантированно поймать момент "это первый /start", а не полагаться на
     отдельную проверку до похода в get_or_create_user (иначе между проверкой
     и созданием юзер мог бы засчитаться дважды). get_or_create_user,
     вызванный следом в _render_profile, просто найдёт уже созданную запись
-    и не тронет referred_by.
+    и не тронет referred_by/balance — first_name сюда передаём явно, чтобы
+    не зависеть от того, что _render_profile вообще будет вызван следом.
     """
     if referrer_tg_id == tg_id:
         return False  # нельзя пригласить самого себя
@@ -183,6 +271,7 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
         tg_id=tg_id,
         referred_by=referrer_tg_id,
         balance=round(config.referral_invitee_bonus_rub, 2),
+        first_name=first_name,
         sub_token=secrets.token_urlsafe(24),
     )
     session.add(user)
@@ -210,19 +299,28 @@ async def delete_user_completely(session: AsyncSession, user: User) -> None:
     await session.commit()
 
 
-async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | None) -> User:
+async def get_or_create_user(
+    session: AsyncSession, tg_id: int, username: str | None, first_name: str | None = None
+) -> User:
     result = await session.execute(select(User).where(User.tg_id == tg_id))
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(tg_id=tg_id, username=username, sub_token=secrets.token_urlsafe(24))
+        user = User(tg_id=tg_id, username=username, first_name=first_name, sub_token=secrets.token_urlsafe(24))
         session.add(user)
         await session.commit()
         await session.refresh(user)
-    elif username and user.username != username:
-        # держим username свежим, чтобы поиск по нему (напр. /promo_send) не устаревал
-        user.username = username
-        await session.commit()
-        await session.refresh(user)
+    else:
+        changed = False
+        if username and user.username != username:
+            # держим username свежим, чтобы поиск по нему (напр. /promo_send) не устаревал
+            user.username = username
+            changed = True
+        if first_name and user.first_name != first_name:
+            user.first_name = first_name
+            changed = True
+        if changed:
+            await session.commit()
+            await session.refresh(user)
     return user
 
 
@@ -300,6 +398,17 @@ def effective_device_limit(user: User) -> int:
     if config.device_limit <= 0:
         return 0
     return config.device_limit + user.extra_devices
+
+
+def remaining_device_capacity(user: User) -> int | None:
+    """Сколько ещё устройств можно докупить, не превысив config.max_device_limit
+    (реальный потолок протокола/VPN-панели на одну ссылку-подписку).
+    None — потолка нет (max_device_limit <= 0), докупать можно сколько угодно.
+    Иначе — неотрицательное число (может быть 0, если потолок уже достигнут
+    или превышен раньше добавленным вручную лимитом)."""
+    if config.max_device_limit <= 0:
+        return None
+    return max(0, config.max_device_limit - effective_device_limit(user))
 
 
 async def add_extra_devices(session: AsyncSession, user: User, count: int) -> User:
@@ -406,6 +515,7 @@ async def create_invoice(
     currency: str = "USDT",
     discount_percent: float = 0.0,
     quantity: int | None = None,
+    balance_credit: float = 0.0,
 ) -> Invoice:
     inv = Invoice(
         user_id=user_id,
@@ -418,6 +528,7 @@ async def create_invoice(
         currency=currency,
         discount_percent=discount_percent,
         quantity=quantity,
+        balance_credit=balance_credit,
         status="active",
     )
     session.add(inv)
@@ -439,6 +550,37 @@ async def mark_invoice_paid(session: AsyncSession, invoice: Invoice) -> None:
 async def all_active_subscriptions(session: AsyncSession) -> list[Subscription]:
     result = await session.execute(select(Subscription))
     return list(result.scalars().all())
+
+
+async def count_all_users(session: AsyncSession) -> int:
+    """Все пользователи, когда-либо запустившие бота (все строки users)."""
+    result = await session.execute(select(func.count()).select_from(User))
+    return result.scalar_one()
+
+
+async def count_paid_users(session: AsyncSession) -> int:
+    """Реальные лиды: пользователи, у которых subscription.plan_code — не
+    'trial' (т.е. когда-либо реально покупали тариф — за деньги, с баланса
+    или по скидке 100%, а не только получили бесплатный пробный период).
+    subscriptions.user_id уникален (см. модель) — один пользователь
+    считается один раз, даже если продлевал подписку много раз."""
+    result = await session.execute(
+        select(func.count()).select_from(Subscription).where(Subscription.plan_code != "trial")
+    )
+    return result.scalar_one()
+
+
+async def list_users_missing_first_name(session: AsyncSession) -> list[User]:
+    """Пользователи без сохранённого first_name — обычно те, кто попал в базу
+    до того, как для их конкретного пути (напр. переход по реф. ссылке) стали
+    сохранять имя. См. /backfill_names в handlers/admin.py."""
+    result = await session.execute(select(User).where(User.first_name.is_(None)))
+    return list(result.scalars().all())
+
+
+async def set_user_first_name(session: AsyncSession, user: User, first_name: str) -> None:
+    user.first_name = first_name
+    await session.commit()
 
 
 # --- Тарифы: config.PLANS + админ-переопределения (вкл/выкл, цена) ---
