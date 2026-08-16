@@ -43,6 +43,7 @@ async def init_db() -> None:
         await _ensure_login_token_columns(conn)
         await _ensure_device_columns(conn)
         await _ensure_referral_columns(conn)
+        await _ensure_sub_token_column(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -136,6 +137,18 @@ async def _ensure_referral_columns(conn) -> None:
     await conn.run_sync(_add_missing_columns)
 
 
+async def _ensure_sub_token_column(conn) -> None:
+    """Сам-миграция: users.sub_token появился вместе с /sub/<token> —
+    добавляем колонку в уже существующие БД, если её ещё нет."""
+
+    def _add_missing_columns(sync_conn):
+        users_columns = _table_columns(sync_conn, "users")
+        if "sub_token" not in users_columns:
+            sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN sub_token VARCHAR")
+
+    await conn.run_sync(_add_missing_columns)
+
+
 async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     result = await session.execute(select(func.count()).select_from(User).where(User.referred_by == tg_id))
     return result.scalar_one()
@@ -166,7 +179,12 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     if referrer is None:
         return False  # реферер с таким tg_id не найден — ссылка невалидна
 
-    user = User(tg_id=tg_id, referred_by=referrer_tg_id, balance=round(config.referral_invitee_bonus_rub, 2))
+    user = User(
+        tg_id=tg_id,
+        referred_by=referrer_tg_id,
+        balance=round(config.referral_invitee_bonus_rub, 2),
+        sub_token=secrets.token_urlsafe(24),
+    )
     session.add(user)
     referrer.balance = round(referrer.balance + config.referral_bonus_rub, 2)
     await session.commit()
@@ -177,7 +195,7 @@ async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | 
     result = await session.execute(select(User).where(User.tg_id == tg_id))
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(tg_id=tg_id, username=username)
+        user = User(tg_id=tg_id, username=username, sub_token=secrets.token_urlsafe(24))
         session.add(user)
         await session.commit()
         await session.refresh(user)
@@ -187,6 +205,23 @@ async def get_or_create_user(session: AsyncSession, tg_id: int, username: str | 
         await session.commit()
         await session.refresh(user)
     return user
+
+
+async def ensure_sub_token(session: AsyncSession, user: User) -> str:
+    """Лениво выдаёт sub_token пользователям, созданным до появления
+    /sub/<token> (self-migration добавляет колонку, но не заполняет её
+    для уже существующих строк)."""
+    if user.sub_token:
+        return user.sub_token
+    user.sub_token = secrets.token_urlsafe(24)
+    await session.commit()
+    await session.refresh(user)
+    return user.sub_token
+
+
+async def get_user_by_sub_token(session: AsyncSession, token: str) -> User | None:
+    result = await session.execute(select(User).where(User.sub_token == token))
+    return result.scalar_one_or_none()
 
 
 async def get_user_by_username(session: AsyncSession, username: str) -> User | None:

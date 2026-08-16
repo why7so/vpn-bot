@@ -12,6 +12,7 @@ REST API для Telegram Mini App (WebApp) — «личный кабинет» �
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import logging
 
@@ -34,6 +35,7 @@ from database.db import (
     get_plan,
     get_plans as list_plans,
     get_subscription,
+    get_user_by_sub_token,
     mark_invoice_paid,
     revoke_browser_session,
 )
@@ -565,6 +567,43 @@ async def invoice_status(request: web.Request) -> web.Response:
         await mark_invoice_paid(session, local_invoice)
 
     return web.json_response({"status": "paid", "subscription_url": subscription_url})
+
+
+@routes.get("/sub/{token}")
+async def get_subscription_config(request: web.Request) -> web.Response:
+    """Ссылка-подписка для VPN-клиента (Happ/INCY/v2rayNG и т.п.) —
+    ПУБЛИЧНЫЙ роут без Telegram-авторизации: сам VPN-клиент не умеет её
+    передавать, безопасность держится на непредсказуемости sub_token в пути.
+
+    Отдаёт conf-строки из SUBSCRIPTION_NODE_LINKS (общие для всех
+    пользователей — per-user провижининг появится вместе с мастер-сервером,
+    см. services/vpn_provider.py) плюс заголовок subscription-userinfo с
+    РЕАЛЬНЫМ сроком действия подписки этого пользователя (total=0 — Happ
+    показывает это как безлимитный трафик "∞", upload/download=0, потому что
+    per-node учёт трафика тоже появится только с мастер-сервером).
+    """
+    token = request.match_info["token"]
+
+    async with async_session() as session:
+        user = await get_user_by_sub_token(session, token)
+        if user is None:
+            raise web.HTTPNotFound(text="subscription not found")
+        sub = await get_subscription(session, user.id)
+
+    expire_at = sub.expires_at if sub else dt.datetime.utcnow()
+    expire_ts = int(expire_at.replace(tzinfo=dt.timezone.utc).timestamp())
+
+    body = "\n".join(config.subscription_node_links)
+    body_b64 = base64.b64encode(body.encode("utf-8")).decode("ascii")
+
+    filename = "".join(ch for ch in config.vpn_name if ch.isalnum()) or "subscription"
+    headers = {
+        "profile-title": config.vpn_name,
+        "subscription-userinfo": f"upload=0; download=0; total=0; expire={expire_ts}",
+        "content-disposition": f'attachment; filename="{filename}"',
+        "profile-update-interval": "6",
+    }
+    return web.Response(text=body_b64, headers=headers, content_type="text/plain")
 
 
 @web.middleware

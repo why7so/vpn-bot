@@ -107,6 +107,31 @@ class Config:
     # Origin фронтенда для CORS, напр. https://myvpn.vercel.app ; "*" — разрешить всем (не для продакшена)
     api_cors_origin: str = os.getenv("API_CORS_ORIGIN", "*")
 
+    # --- Ссылка-подписка (/sub/<token> в webapp/api.py) ---
+    # Публичный базовый URL, на котором отвечает webapp/api.py (тот же сервис,
+    # что и бот, — см. main.py: aiohttp поднимается на API_HOST:API_PORT).
+    # Например https://vpn-bot-production-555c.up.railway.app — БЕЗ слэша на конце.
+    subscription_base_url: str = os.getenv("SUBSCRIPTION_BASE_URL", "").rstrip("/")
+    # Строки-конфиги (vless://…, hysteria2://… и т.п.), которые отдаются всем
+    # пользователям в теле подписки — по одной на строку. Пока нет
+    # мастер-сервера с per-user провижининг — сервера общие для всех клиентов,
+    # уникальность на пользователя даёт только сам sub_token в URL (не палит
+    # tg_id/UUID) и метаданные (дни/трафик), которые /sub/<token> считает
+    # индивидуально по подписке пользователя.
+    subscription_node_links_raw: str = os.getenv("SUBSCRIPTION_NODE_LINKS", "")
+
+    @property
+    def subscription_node_links(self) -> list[str]:
+        return [line.strip() for line in self.subscription_node_links_raw.splitlines() if line.strip()]
+
+
+def build_subscription_url(sub_token: str) -> str:
+    """URL ссылки-подписки для VPN-клиента (Happ/INCY/v2rayNG и т.п.).
+    Пусто, если SUBSCRIPTION_BASE_URL ещё не настроен в .env."""
+    if not config.subscription_base_url:
+        return ""
+    return f"{config.subscription_base_url}/sub/{sub_token}"
+
 
 # Тарифные планы: (название, дней, цена в USDT / цена в RUB)
 PLANS = [

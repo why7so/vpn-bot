@@ -36,6 +36,10 @@ class User(Base):
     # tg_id, а не users.id — реф. ссылка формата ?start=ref_<TG_ID> строится
     # из него напрямую, без лишнего похода в БД за UUID при генерации ссылки.
     referred_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Токен для ссылки-подписки (/sub/<token> в webapp/api.py) — отдельный от
+    # tg_id/id, чтобы саму ссылку-подписку можно было не глядя вставлять в
+    # VPN-клиент без риска раскрыть внутренний UUID или Telegram ID.
+    sub_token: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
     subscription: Mapped["Subscription"] = relationship(back_populates="user", uselist=False)

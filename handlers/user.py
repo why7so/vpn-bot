@@ -6,7 +6,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from config import DEVICE_QTY_PRESETS, config
+from config import DEVICE_QTY_PRESETS, build_subscription_url, config
 from database.db import (
     PromoError,
     add_extra_devices,
@@ -16,6 +16,7 @@ from database.db import (
     create_invoice,
     create_login_token,
     effective_device_limit,
+    ensure_sub_token,
     get_effective_discount,
     get_invoice_by_invoice_id,
     get_or_create_user,
@@ -519,8 +520,10 @@ async def _grant_subscription(session, tg_id: int, username: str | None, plan_co
     new_expire = base + dt.timedelta(days=days)
 
     vpn_result = await vpn_client.ensure_client(user.tg_id, new_expire, device_limit=effective_device_limit(user))
-    subscription_url = vpn_result.get("subscription_url")
     await set_vpn_client_uuid(session, user, vpn_result["uuid"])
+
+    sub_token = await ensure_sub_token(session, user)
+    subscription_url = build_subscription_url(sub_token) or vpn_result.get("subscription_url")
 
     await upsert_subscription(
         session,
