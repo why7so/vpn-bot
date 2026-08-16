@@ -197,7 +197,9 @@ async def get_top_referrers(session: AsyncSession, limit: int = 10) -> list[tupl
     return top
 
 
-async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_tg_id: int) -> bool:
+async def register_referral_if_new(
+    session: AsyncSession, tg_id: int, referrer_tg_id: int, first_name: str | None = None
+) -> bool:
     """Реф. ссылка вида ?start=ref_<TG_ID>: если пользователь tg_id ещё не
     существует в базе — создаёт его с привязкой referred_by и сразу
     начисляет бонусы ОБЕИМ сторонам: рефереру — config.referral_bonus_rub,
@@ -210,7 +212,8 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     отдельную проверку до похода в get_or_create_user (иначе между проверкой
     и созданием юзер мог бы засчитаться дважды). get_or_create_user,
     вызванный следом в _render_profile, просто найдёт уже созданную запись
-    и не тронет referred_by/balance.
+    и не тронет referred_by/balance — first_name сюда передаём явно, чтобы
+    не зависеть от того, что _render_profile вообще будет вызван следом.
     """
     if referrer_tg_id == tg_id:
         return False  # нельзя пригласить самого себя
@@ -223,7 +226,7 @@ async def register_referral_if_new(session: AsyncSession, tg_id: int, referrer_t
     if referrer is None:
         return False  # реферер с таким tg_id не найден — ссылка невалидна
 
-    user = User(tg_id=tg_id, referred_by=referrer_tg_id, balance=config.referral_invitee_bonus_rub)
+    user = User(tg_id=tg_id, referred_by=referrer_tg_id, balance=config.referral_invitee_bonus_rub, first_name=first_name)
     session.add(user)
     referrer.balance = round(referrer.balance + config.referral_bonus_rub, 2)
     await session.commit()
@@ -482,6 +485,19 @@ async def count_paid_users(session: AsyncSession) -> int:
         select(func.count()).select_from(Subscription).where(Subscription.plan_code != "trial")
     )
     return result.scalar_one()
+
+
+async def list_users_missing_first_name(session: AsyncSession) -> list[User]:
+    """Пользователи без сохранённого first_name — обычно те, кто попал в базу
+    до того, как для их конкретного пути (напр. переход по реф. ссылке) стали
+    сохранять имя. См. /backfill_names в handlers/admin.py."""
+    result = await session.execute(select(User).where(User.first_name.is_(None)))
+    return list(result.scalars().all())
+
+
+async def set_user_first_name(session: AsyncSession, user: User, first_name: str) -> None:
+    user.first_name = first_name
+    await session.commit()
 
 
 # --- Тарифы: config.PLANS + админ-переопределения (вкл/выкл, цена) ---

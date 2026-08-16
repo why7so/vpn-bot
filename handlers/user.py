@@ -201,7 +201,9 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             referrer_tg_id = None
         if referrer_tg_id is not None:
             async with async_session() as session:
-                credited = await register_referral_if_new(session, message.from_user.id, referrer_tg_id)
+                credited = await register_referral_if_new(
+                    session, message.from_user.id, referrer_tg_id, message.from_user.first_name
+                )
             if credited:
                 referral_text = (
                     f"🎁 Вы перешли по реферальной ссылке — на баланс начислено "

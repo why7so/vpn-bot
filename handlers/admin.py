@@ -1,4 +1,6 @@
+import asyncio
 import datetime as dt
+import logging
 import uuid
 
 from aiogram import Bot, Router
@@ -19,6 +21,8 @@ from database.db import (
     all_active_subscriptions,
     count_all_users,
     count_paid_users,
+    list_users_missing_first_name,
+    set_user_first_name,
     all_promo_codes,
     async_session,
     create_promo_code,
@@ -40,6 +44,7 @@ from database.db import (
 )
 
 router = Router(name="admin")
+logger = logging.getLogger(__name__)
 
 PROMO_HELP = (
     "Формат:\n"
@@ -199,6 +204,52 @@ async def stats(message: Message) -> None:
         f"Всего пользователей в боте: {total_users}\n"
         f"Купили подписку (реальные лиды, не пробный период): {paid_users}\n\n"
         f"Всего подписок: {len(subs)}\nАктивных: {active}\nИстёкших: {expired}"
+    )
+
+
+@router.message(Command("backfill_names"))
+async def backfill_names(message: Message, bot: Bot) -> None:
+    """Разовая утилита: дозаполняет first_name пользователям, у которых он
+    пустой (обычно те, кто зашёл в бота до того, как first_name стали
+    сохранять для их конкретного пути — например, переход по реф. ссылке до
+    соответствующего фикса). Идём в Telegram get_chat() по каждому tg_id —
+    работает, только если у бота уже есть открытый чат с пользователем."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    async with async_session() as session:
+        users = await list_users_missing_first_name(session)
+
+    if not users:
+        await message.answer("Все пользователи уже с именем — нечего дозаполнять.")
+        return
+
+    status = await message.answer(f"Дозаполняю имена: 0/{len(users)}…")
+    updated = 0
+    failed = 0
+    for i, user in enumerate(users, start=1):
+        try:
+            chat = await bot.get_chat(user.tg_id)
+            first_name = getattr(chat, "first_name", None)
+            if first_name:
+                async with async_session() as session:
+                    fresh = await get_user_by_tg_id(session, user.tg_id)
+                    if fresh is not None:
+                        await set_user_first_name(session, fresh, first_name)
+                updated += 1
+        except Exception:
+            logger.exception("Не удалось получить имя для tg_id=%s при бэкфилле", user.tg_id)
+            failed += 1
+        if i % 15 == 0:
+            await asyncio.sleep(1)  # не превышаем rate limit Telegram Bot API
+            try:
+                await status.edit_text(f"Дозаполняю имена: {i}/{len(users)}…")
+            except Exception:
+                pass
+
+    await message.answer(
+        f"✅ Готово: обновлено {updated} из {len(users)}"
+        + (f", не удалось получить имя для {failed} (бот не писал им раньше)" if failed else "")
     )
 
 
@@ -676,7 +727,8 @@ CMD_LIST_TEXT = (
     "/start — главное меню (также реф. ссылка: ?start=ref_TG_ID)\n"
     "/leaderboard — топ-10 по числу приглашённых рефералов\n\n"
     "<b>Админ</b>\n"
-    "/stats — статистика подписок (активные/истёкшие)\n"
+    "/stats — статистика: пользователи, реальные лиды, подписки\n"
+    "/backfill_names — дозаполнить имена пользователям, у которых их ещё нет\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
     "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"
