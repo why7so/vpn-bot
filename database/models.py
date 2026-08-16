@@ -184,3 +184,16 @@ class BrowserSession(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Setting(Base):
+    """Небольшой generic key-value стор для одиночных глобальных настроек,
+    под которые не стоит заводить отдельную таблицу/колонку. Сейчас
+    используется для точки отсчёта /leaderboard (leaderboard_reset_at) —
+    см. handlers/admin.py: /leaderboard_reset."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)

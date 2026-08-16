@@ -15,6 +15,7 @@ from database.models import (
     PlanOverride,
     PromoCode,
     PromoRedemption,
+    Setting,
     Subscription,
     User,
 )
@@ -164,22 +165,49 @@ async def _ensure_user_first_name_column(conn) -> None:
     await conn.run_sync(_add_missing_columns)
 
 
-async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
-    result = await session.execute(select(func.count()).select_from(User).where(User.referred_by == tg_id))
+async def get_setting(session: AsyncSession, key: str) -> str | None:
+    result = await session.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    return setting.value if setting is not None else None
+
+
+async def set_setting(session: AsyncSession, key: str, value: str | None) -> None:
+    result = await session.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        session.add(Setting(key=key, value=value))
+    else:
+        setting.value = value
+    await session.commit()
+
+
+LEADERBOARD_RESET_SETTING_KEY = "leaderboard_reset_at"
+
+
+async def get_referral_count(session: AsyncSession, tg_id: int, since: dt.datetime | None = None) -> int:
+    query = select(func.count()).select_from(User).where(User.referred_by == tg_id)
+    if since is not None:
+        query = query.where(User.created_at >= since)
+    result = await session.execute(query)
     return result.scalar_one()
 
 
-async def get_top_referrers(session: AsyncSession, limit: int = 10) -> list[tuple[User, int]]:
+async def get_top_referrers(
+    session: AsyncSession, limit: int = 10, since: dt.datetime | None = None
+) -> list[tuple[User, int]]:
     """Топ рефереров по числу приглашённых (referred_by == их tg_id).
+    since — считать только тех, кто присоединился (User.created_at) не раньше
+    этого момента: так работает /leaderboard_reset — не удаляет историю
+    рефералов (это сломало бы уже начисленные бонусы), а просто "обнуляет
+    счётчик" для конкурсов, начиная считать заново с этой точки.
     Возвращает список (User, count) отсортированный по убыванию count,
     без пользователей с нулём приглашённых.
     """
+    query = select(User.referred_by, func.count().label("cnt")).where(User.referred_by.is_not(None))
+    if since is not None:
+        query = query.where(User.created_at >= since)
     referrer_counts = await session.execute(
-        select(User.referred_by, func.count().label("cnt"))
-        .where(User.referred_by.is_not(None))
-        .group_by(User.referred_by)
-        .order_by(func.count().desc())
-        .limit(limit)
+        query.group_by(User.referred_by).order_by(func.count().desc()).limit(limit)
     )
     rows = referrer_counts.all()
     if not rows:

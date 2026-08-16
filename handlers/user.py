@@ -23,9 +23,11 @@ from database.db import (
     get_plan,
     get_plans,
     get_referral_count,
+    get_setting,
     get_subscription,
     get_top_referrers,
     get_user_by_tg_id,
+    LEADERBOARD_RESET_SETTING_KEY,
     mark_invoice_paid,
     redeem_promo_code,
     register_referral_if_new,
@@ -335,18 +337,23 @@ _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 @router.message(Command("leaderboard"))
 async def leaderboard(message: Message) -> None:
     """Топ-10 пользователей по числу приглашённых рефералов. Доступно всем —
-    не админ-команда."""
+    не админ-команда. Если админ вызывал /leaderboard_reset — считаем только
+    рефералов, присоединившихся после этой точки (см. handlers/admin.py)."""
     async with async_session() as session:
-        top = await get_top_referrers(session, limit=10)
-        my_count = await get_referral_count(session, message.from_user.id)
+        since_raw = await get_setting(session, LEADERBOARD_RESET_SETTING_KEY)
+        since = dt.datetime.fromisoformat(since_raw) if since_raw else None
+        top = await get_top_referrers(session, limit=10, since=since)
+        my_count = await get_referral_count(session, message.from_user.id, since=since)
+
+    header = "🏆 <b>Топ-10 по рефералам</b>"
+    if since is not None:
+        header += f"\nСчёт идёт с {since.strftime('%d.%m %H:%M')} UTC"
 
     if not top:
-        await message.answer(
-            "🏆 <b>Топ-10 по рефералам</b>\n\nПока никто никого не пригласил — станьте первым!"
-        )
+        await message.answer(f"{header}\n\nПока никто никого не пригласил — станьте первым!")
         return
 
-    lines = ["🏆 <b>Топ-10 по рефералам</b>", ""]
+    lines = [header, ""]
     for i, (user, count) in enumerate(top, start=1):
         place = _MEDALS.get(i, f"{i}.")
         name = html_escape(user.first_name) if user.first_name else "Без имени"

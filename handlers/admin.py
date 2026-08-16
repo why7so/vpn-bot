@@ -32,10 +32,13 @@ from database.db import (
     get_promo_by_code,
     get_recent_invoices,
     get_referral_count,
+    get_setting,
     get_subscription,
     get_user_by_id,
     get_user_by_tg_id,
     get_user_by_username,
+    LEADERBOARD_RESET_SETTING_KEY,
+    set_setting,
     reset_plan_price,
     set_plan_enabled,
     set_plan_price,
@@ -250,6 +253,48 @@ async def backfill_names(message: Message, bot: Bot) -> None:
     await message.answer(
         f"✅ Готово: обновлено {updated} из {len(users)}"
         + (f", не удалось получить имя для {failed} (бот не писал им раньше)" if failed else "")
+    )
+
+
+@router.message(Command("leaderboard_reset"))
+async def leaderboard_reset(message: Message) -> None:
+    """Обнуляет счётчик /leaderboard для конкурсов вида 'кто за 30 минут
+    пригласит больше всего людей' — НЕ удаляет реальных рефералов и не
+    трогает уже начисленные бонусы, а просто задаёт точку отсчёта: дальше
+    /leaderboard считает только тех, кто присоединился после неё.
+
+    /leaderboard_reset — начать отсчёт заново (с текущего момента)
+    /leaderboard_reset off — вернуть счёт за всё время (снять точку отсчёта)
+    /leaderboard_reset status — посмотреть текущую точку отсчёта, если есть
+    """
+    if not _is_admin(message.from_user.id):
+        return
+
+    arg = (message.text or "").split(maxsplit=1)
+    arg = arg[1].strip().lower() if len(arg) > 1 else ""
+
+    async with async_session() as session:
+        if arg == "off":
+            await set_setting(session, LEADERBOARD_RESET_SETTING_KEY, None)
+            await message.answer("✅ Точка отсчёта снята — /leaderboard снова считает за всё время.")
+            return
+
+        if arg == "status":
+            current = await get_setting(session, LEADERBOARD_RESET_SETTING_KEY)
+            if current is None:
+                await message.answer("Точка отсчёта не задана — /leaderboard считает за всё время.")
+            else:
+                since = dt.datetime.fromisoformat(current)
+                await message.answer(f"Точка отсчёта: {since.strftime('%d.%m.%Y %H:%M')} UTC")
+            return
+
+        now = dt.datetime.utcnow()
+        await set_setting(session, LEADERBOARD_RESET_SETTING_KEY, now.isoformat())
+
+    await message.answer(
+        f"🔄 Готово! /leaderboard теперь считает рефералов с {now.strftime('%d.%m %H:%M')} UTC — "
+        "удобно для конкурса на время (например, 'кто за 30 минут пригласит больше всего').\n\n"
+        "Когда захотите вернуть счёт за всё время — <code>/leaderboard_reset off</code>."
     )
 
 
@@ -729,6 +774,7 @@ CMD_LIST_TEXT = (
     "<b>Админ</b>\n"
     "/stats — статистика: пользователи, реальные лиды, подписки\n"
     "/backfill_names — дозаполнить имена пользователям, у которых их ещё нет\n"
+    "/leaderboard_reset [off|status] — обнулить/снять/посмотреть точку отсчёта конкурса по рефералам\n"
     "/user_info TG_ID_или_@username — полная информация о пользователе (UUID, баланс, подписка, счета)\n"
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
     "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"
