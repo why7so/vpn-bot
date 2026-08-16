@@ -466,6 +466,24 @@ async def all_active_subscriptions(session: AsyncSession) -> list[Subscription]:
     return list(result.scalars().all())
 
 
+async def count_all_users(session: AsyncSession) -> int:
+    """Все пользователи, когда-либо запустившие бота (все строки users)."""
+    result = await session.execute(select(func.count()).select_from(User))
+    return result.scalar_one()
+
+
+async def count_paid_users(session: AsyncSession) -> int:
+    """Реальные лиды: пользователи, у которых subscription.plan_code — не
+    'trial' (т.е. когда-либо реально покупали тариф — за деньги, с баланса
+    или по скидке 100%, а не только получили бесплатный пробный период).
+    subscriptions.user_id уникален (см. модель) — один пользователь
+    считается один раз, даже если продлевал подписку много раз."""
+    result = await session.execute(
+        select(func.count()).select_from(Subscription).where(Subscription.plan_code != "trial")
+    )
+    return result.scalar_one()
+
+
 # --- Тарифы: config.PLANS + админ-переопределения (вкл/выкл, цена) ---
 
 

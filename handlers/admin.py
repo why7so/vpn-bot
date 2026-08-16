@@ -17,6 +17,8 @@ from database.db import (
     PromoError,
     adjust_balance,
     all_active_subscriptions,
+    count_all_users,
+    count_paid_users,
     all_promo_codes,
     async_session,
     create_promo_code,
@@ -185,13 +187,18 @@ async def stats(message: Message) -> None:
 
     async with async_session() as session:
         subs = await all_active_subscriptions(session)
+        total_users = await count_all_users(session)
+        paid_users = await count_paid_users(session)
 
     now = dt.datetime.utcnow()
     active = sum(1 for s in subs if s.expires_at > now)
     expired = len(subs) - active
 
     await message.answer(
-        f"📊 Статистика\n\nВсего подписок: {len(subs)}\nАктивных: {active}\nИстёкших: {expired}"
+        "📊 Статистика\n\n"
+        f"Всего пользователей в боте: {total_users}\n"
+        f"Купили подписку (реальные лиды, не пробный период): {paid_users}\n\n"
+        f"Всего подписок: {len(subs)}\nАктивных: {active}\nИстёкших: {expired}"
     )
 
 
