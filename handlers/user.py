@@ -347,8 +347,8 @@ async def leaderboard(message: Message) -> None:
     lines = ["🏆 <b>Топ-10 по рефералам</b>", ""]
     for i, (user, count) in enumerate(top, start=1):
         place = _MEDALS.get(i, f"{i}.")
-        name = html_escape(user.first_name) if user.first_name else f"id{user.tg_id}"
-        lines.append(f"{place} {name} — {count}")
+        name = html_escape(user.first_name) if user.first_name else "Без имени"
+        lines.append(f"{place} {name} (id{user.tg_id}) — {count}")
 
     lines.append("")
     lines.append(f"Вы пригласили: {my_count}")
