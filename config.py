@@ -35,6 +35,12 @@ class Config:
     # заглушка (см. докстринг в самом файле).
     master_api_base_url: str = os.getenv("MASTER_API_BASE_URL", "")
     master_api_token: str = os.getenv("MASTER_API_TOKEN", "")
+    # Секрет для входящего вебхука от мастер-сервера о подключении устройства
+    # (см. webapp/api.py: POST /webhook/device-connected). Отдельный от
+    # master_api_token, т.к. это разные направления: master_api_token — бот
+    # звонит мастер-серверу, этот секрет — наоборот, мастер-сервер звонит
+    # боту. Пока не задан — эндпоинт отвечает 503 и не может быть вызван.
+    master_webhook_secret: str = os.getenv("MASTER_WEBHOOK_SECRET", "")
     vpn_email_prefix: str = os.getenv("VPN_EMAIL_PREFIX", "tgbot_")
     # Максимальное число одновременных подключений (устройств) на одного клиента.
     # Используется провайдером VPN-доступа (см. services/vpn_provider.py).
