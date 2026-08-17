@@ -20,6 +20,7 @@ from database.db import (
     PromoError,
     adjust_balance,
     all_active_subscriptions,
+    backfill_subscription_urls,
     count_all_users,
     count_paid_users,
     list_users_missing_first_name,
@@ -188,6 +189,26 @@ async def set_vpn_link(message: Message) -> None:
         f"TG ID: <code>{user.tg_id}</code>\n"
         f"Ссылка: <code>{sub.subscription_url}</code>"
     )
+
+
+@router.message(Command("backfill_sub_urls"))
+async def backfill_sub_urls(message: Message) -> None:
+    """Разовая утилита: у пользователей, получивших подписку ДО того, как
+    заработал настоящий GET /sub/<token>, в БД всё ещё старая ссылка-заглушка
+    (обычно ведёт на example.com и всегда отдаёт 404 в VPN-клиенте — именно
+    так это выглядит у пользователя). Пересчитывает subscription_url всем
+    подпискам разом. Требует настроенный SUBSCRIPTION_BASE_URL в .env."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    if not config.subscription_base_url:
+        await message.answer("⚠️ SUBSCRIPTION_BASE_URL не задан в .env — сначала настройте его.")
+        return
+
+    async with async_session() as session:
+        updated = await backfill_subscription_urls(session)
+
+    await message.answer(f"✅ Обновлено ссылок-подписок: {updated}")
 
 
 @router.message(Command("reset_account"))
@@ -845,6 +866,7 @@ CMD_LIST_TEXT = (
     "/add_balance TG_ID_или_@username СУММА — начислить/списать баланс\n"
     "/set_vpn_link UUID_или_TG_ID_или_@username ССЫЛКА — вручную привязать ссылку на VPN-ключ к подписке\n"
     "/reset_account UUID_или_TG_ID_или_@username — ПОЛНОСТЬЮ удалить пользователя (с подтверждением)\n"
+    "/backfill_sub_urls — пересчитать subscription_url всем подпискам (после настройки SUBSCRIPTION_BASE_URL)\n"
     "/plans — список тарифов со статусом и ценой\n"
     "/plan_disable КОД — скрыть тариф из продажи\n"
     "/plan_enable КОД — включить тариф\n"

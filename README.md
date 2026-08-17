@@ -141,6 +141,19 @@ hysteria2://...#Paris1
 (`SUBSCRIPTION_NODE_LINKS` — многострочное значение, каждая ссылка на своей
 строке; в Railway это можно вставить прямо в текстовое поле переменной.)
 
+⚠️ **Не используйте `unnamedvpn.dpdns.org` (или любой другой домен на
+GitHub Pages) как `SUBSCRIPTION_BASE_URL`** — GitHub Pages чисто статический
+хостинг и не умеет проксировать запросы на Railway, `/sub/<token>` там
+всегда будет 404. Если нужен красивый домен вместо `up.railway.app` — либо
+добавьте **отдельный поддомен** (например `sub.unnamedvpn.dpdns.org`) как
+Custom Domain прямо в Railway (Settings → Networking → Custom Domain) с
+CNAME-записью у регистратора, либо переносите фронтенд на Vercel/Netlify,
+где рабочий rewrite/proxy в принципе возможен.
+
+После смены `SUBSCRIPTION_BASE_URL` у пользователей, получивших подписку
+**до** этого, в базе остаётся старая (нерабочая) ссылка — прогоните
+`/backfill_sub_urls`, чтобы пересчитать её всем разом.
+
 ## Реферальная программа
 
 Каждый пользователь получает свою ссылку `https://t.me/<bot>?start=ref_<TG_ID>`

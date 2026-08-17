@@ -6,7 +6,7 @@ import uuid
 from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from config import PLANS, config
+from config import PLANS, build_subscription_url, config
 from database.models import (
     Base,
     BrowserSession,
@@ -550,6 +550,33 @@ async def mark_invoice_paid(session: AsyncSession, invoice: Invoice) -> None:
 async def all_active_subscriptions(session: AsyncSession) -> list[Subscription]:
     result = await session.execute(select(Subscription))
     return list(result.scalars().all())
+
+
+async def backfill_subscription_urls(session: AsyncSession) -> int:
+    """Разовая утилита: пересчитывает subscription_url для подписок, которые
+    были выданы ДО того, как заработал настоящий GET /sub/<token>
+    (webapp/api.py) — у них в базе всё ещё старая ссылка-заглушка из
+    services/vpn_provider.py (обычно ведёт на example.com и всегда отдаёт
+    404). Трогает только те строки, где build_subscription_url реально даёт
+    другое значение (SUBSCRIPTION_BASE_URL должен быть настроен — иначе
+    build_subscription_url возвращает "" и такие подписки пропускаются).
+    Возвращает число обновлённых подписок.
+    """
+    result = await session.execute(select(Subscription))
+    subs = list(result.scalars().all())
+    updated = 0
+    for sub in subs:
+        user_result = await session.execute(select(User).where(User.id == sub.user_id))
+        user = user_result.scalar_one_or_none()
+        if user is None:
+            continue
+        sub_token = await ensure_sub_token(session, user)
+        new_url = build_subscription_url(sub_token)
+        if new_url and sub.subscription_url != new_url:
+            sub.subscription_url = new_url
+            updated += 1
+    await session.commit()
+    return updated
 
 
 async def count_all_users(session: AsyncSession) -> int:
