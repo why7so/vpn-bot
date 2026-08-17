@@ -81,6 +81,14 @@ class Config:
     support_username: str = os.getenv("SUPPORT_USERNAME", "")
     vpn_name: str = os.getenv("VPN_NAME", "Unnamed VPN")
 
+    # Provider ID для Happ (https://happ-proxy.com) — отдельная регистрация
+    # на стороннем сервисе Happ, не делается через код. Разблокирует
+    # "Advanced announcements" в клиенте (карточка с тарифом/днями подписки —
+    # см. GET /sub/<token> в webapp/api.py). Пока не задан — карточка просто
+    # не отправляется, обычная строка трафика/срока (subscription-userinfo)
+    # продолжает работать как раньше.
+    happ_provider_id: str = os.getenv("HAPP_PROVIDER_ID", "")
+
     # Кастомные эмодзи-иконки на кнопках (Bot API 9.4, icon_custom_emoji_id).
     # Работает, только если у владельца бота есть Telegram Premium (или бот
     # купил доп. юзернейм на Fragment) — иначе Telegram просто покажет кнопку

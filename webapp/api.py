@@ -638,6 +638,17 @@ async def get_subscription_config(request: web.Request) -> web.Response:
     РЕАЛЬНЫМ сроком действия подписки этого пользователя (total=0 — Happ
     показывает это как безлимитный трафик "∞", upload/download=0, потому что
     per-node учёт трафика тоже появится только с мастер-сервером).
+
+    support-url — иконка Telegram-поддержки в приложении (см.
+    https://www.happ.su/main/dev-docs/app-management#link-to-the-support-page),
+    стандартный параметр, не требует ничего доп.
+
+    sub-info-text/providerid — "карточка" с тарифом и днями подписки в
+    приложении (см. скриншот из тикета) — это "Advanced announcements" Happ,
+    для которых нужен Provider ID: отдельная регистрация на
+    https://happ-proxy.com (сторонний сервис Happ, не часть этого проекта).
+    Пока config.happ_provider_id не задан — эти заголовки просто не
+    отправляются, остальное продолжает работать как раньше.
     """
     token = request.match_info["token"]
 
@@ -646,8 +657,10 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         if user is None:
             raise web.HTTPNotFound(text="subscription not found")
         sub = await get_subscription(session, user.id)
+        plan = await get_plan(session, sub.plan_code) if sub and sub.plan_code else None
 
-    expire_at = sub.expires_at if sub else dt.datetime.utcnow()
+    now = dt.datetime.utcnow()
+    expire_at = sub.expires_at if sub else now
     expire_ts = int(expire_at.replace(tzinfo=dt.timezone.utc).timestamp())
 
     body = "\n".join(config.subscription_node_links)
@@ -660,6 +673,28 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         "content-disposition": f'attachment; filename="{filename}"',
         "profile-update-interval": "1",
     }
+
+    if config.support_username:
+        headers["support-url"] = f"https://t.me/{config.support_username.lstrip('@')}"
+    if config.webapp_url:
+        headers["profile-web-page-url"] = config.webapp_url
+
+    if config.happ_provider_id:
+        headers["providerid"] = config.happ_provider_id
+        days_left = max(0, (expire_at - now).days) if sub else 0
+        info_lines = []
+        if plan:
+            info_lines.append(f"Тариф: {plan['title']}")
+        info_lines.append(f"Осталось {days_left} дн. подписки" if sub else "Подписка не активна")
+        if config.support_username:
+            info_lines.append(f"Telegram — @{config.support_username.lstrip('@')}")
+        # HTTP-заголовки не допускают перевод строки внутри значения —
+        # многострочный текст передаём как base64 (тот же паттерн, что
+        # у profile-title/announce в документации Happ).
+        info_text = "\n".join(info_lines)
+        headers["sub-info-text"] = "base64:" + base64.b64encode(info_text.encode("utf-8")).decode("ascii")
+        headers["sub-expire"] = "1"
+
     return web.Response(text=body_b64, headers=headers, content_type="text/plain")
 
 
