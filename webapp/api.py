@@ -658,7 +658,7 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         "profile-title": config.vpn_name,
         "subscription-userinfo": f"upload=0; download=0; total=0; expire={expire_ts}",
         "content-disposition": f'attachment; filename="{filename}"',
-        "profile-update-interval": "6",
+        "profile-update-interval": "1",
     }
     return web.Response(text=body_b64, headers=headers, content_type="text/plain")
 
