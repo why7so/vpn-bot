@@ -190,6 +190,31 @@ class BrowserSession(Base):
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class SubscriptionDevice(Base):
+    """Устройство/VPN-клиент, который когда-либо запрашивал ссылку-подписку
+    пользователя (GET /sub/<token>). Идентифицируется по client_name,
+    распознанному из User-Agent (см. _parse_client_name в webapp/api.py) —
+    так периодические автообновления подписки уже известным клиентом
+    (Happ дёргает /sub раз в несколько часов по расписанию) не приводят к
+    повторным уведомлениям, шлём только при первом обращении нового клиента.
+    Ограничение: два разных физических устройства с одинаковым клиентом
+    (например, два телефона с Happ) не различаются — это единственный
+    практичный компромисс без полноценного per-device провижининга."""
+
+    __tablename__ = "subscription_devices"
+    __table_args__ = (UniqueConstraint("user_id", "client_name", name="uq_subscription_device"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    client_name: Mapped[str] = mapped_column(String)
+    user_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
+    first_seen_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    last_seen_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
+    )
+
+
 class Setting(Base):
     """Небольшой generic key-value стор для одиночных глобальных настроек,
     под которые не стоит заводить отдельную таблицу/колонку. Сейчас

@@ -37,6 +37,7 @@ from database.db import (
     get_plans as list_plans,
     get_subscription,
     get_user_by_sub_token,
+    register_subscription_device,
     mark_invoice_paid,
     revoke_browser_session,
 )
@@ -623,6 +624,49 @@ async def invoice_status(request: web.Request) -> web.Response:
     return web.json_response({"status": "paid", "subscription_url": subscription_url})
 
 
+_KNOWN_VPN_CLIENTS = (
+    ("happ", "Happ"),
+    ("incy", "INCY"),
+    ("v2rayng", "v2rayNG"),
+    ("sing-box", "sing-box"),
+    ("streisand", "Streisand"),
+    ("shadowrocket", "Shadowrocket"),
+    ("clash", "Clash"),
+    ("hiddify", "Hiddify"),
+    ("nekobox", "NekoBox"),
+    ("karing", "Karing"),
+    ("foxray", "FoXray"),
+    ("v2box", "V2Box"),
+)
+
+
+def _parse_client_name(user_agent: str | None) -> str:
+    """Грубое распознавание VPN-клиента по User-Agent запроса к /sub/<token>.
+    Список неполный и будет неточным для незнакомых/будущих клиентов —
+    в таком случае используем сам User-Agent (обрезанный) как имя, чтобы
+    хотя бы не терять уведомление совсем."""
+    ua = (user_agent or "").strip()
+    ua_lower = ua.lower()
+    for needle, label in _KNOWN_VPN_CLIENTS:
+        if needle in ua_lower:
+            return label
+    return ua[:40] if ua else "неизвестный клиент"
+
+
+def _client_ip(request: web.Request) -> str | None:
+    """IP клиента с учётом цепочки прокси (Cloudflare → Railway → aiohttp).
+    CF-Connecting-IP — самый надёжный источник, когда домен идёт через
+    Cloudflare; иначе берём первый адрес из X-Forwarded-For, иначе —
+    прямое соединение."""
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if cf_ip:
+        return cf_ip
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote
+
+
 @routes.get("/sub/{token}")
 async def get_subscription_config(request: web.Request) -> web.Response:
     """Ссылка-подписка для VPN-клиента (Happ/INCY/v2rayNG и т.п.) —
@@ -635,6 +679,11 @@ async def get_subscription_config(request: web.Request) -> web.Response:
     РЕАЛЬНЫМ сроком действия подписки этого пользователя (total=0 — Happ
     показывает это как безлимитный трафик "∞", upload/download=0, потому что
     per-node учёт трафика тоже появится только с мастер-сервером).
+
+    При первом обращении нового VPN-клиента (см. register_subscription_device)
+    шлём пользователю уведомление в бота с информацией об устройстве —
+    повторные периодические автообновления подписки уже известным клиентом
+    уведомление не повторяют.
     """
     token = request.match_info["token"]
 
@@ -643,6 +692,27 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         if user is None:
             raise web.HTTPNotFound(text="subscription not found")
         sub = await get_subscription(session, user.id)
+
+        user_agent = request.headers.get("User-Agent")
+        client_name = _parse_client_name(user_agent)
+        ip_address = _client_ip(request)
+        is_new_device = await register_subscription_device(session, user.id, client_name, user_agent, ip_address)
+
+    if is_new_device:
+        bot = request.app.get("bot")
+        if bot is not None:
+            now_str = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            text = (
+                "🔌 Новое подключение\n"
+                f"👤 User: {user.tg_id}\n"
+                f"📱 Device: {client_name}\n"
+                f"🌐 IP: {ip_address or '—'}\n"
+                f"🕒 {now_str}"
+            )
+            try:
+                await bot.send_message(user.tg_id, text)
+            except Exception:
+                logger.exception("Failed to notify tg_id=%s about new subscription device", user.tg_id)
 
     expire_at = sub.expires_at if sub else dt.datetime.utcnow()
     expire_ts = int(expire_at.replace(tzinfo=dt.timezone.utc).timestamp())

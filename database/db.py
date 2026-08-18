@@ -17,6 +17,7 @@ from database.models import (
     PromoRedemption,
     Setting,
     Subscription,
+    SubscriptionDevice,
     User,
 )
 
@@ -550,6 +551,47 @@ async def mark_invoice_paid(session: AsyncSession, invoice: Invoice) -> None:
 async def all_active_subscriptions(session: AsyncSession) -> list[Subscription]:
     result = await session.execute(select(Subscription))
     return list(result.scalars().all())
+
+
+async def register_subscription_device(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    client_name: str,
+    user_agent: str | None,
+    ip_address: str | None,
+) -> bool:
+    """Регистрирует обращение VPN-клиента к /sub/<token>. Возвращает True,
+    только если это ПЕРВОЕ обращение такого client_name для этого
+    пользователя (стоит уведомить о новом устройстве) — при повторных
+    обращениях того же клиента просто обновляет last_seen_at/ip_address
+    и возвращает False, чтобы периодические автообновления подписки не
+    спамили уведомлениями."""
+    result = await session.execute(
+        select(SubscriptionDevice).where(
+            SubscriptionDevice.user_id == user_id, SubscriptionDevice.client_name == client_name
+        )
+    )
+    device = result.scalar_one_or_none()
+    now = dt.datetime.utcnow()
+    if device is not None:
+        device.last_seen_at = now
+        if ip_address:
+            device.ip_address = ip_address
+        await session.commit()
+        return False
+
+    session.add(
+        SubscriptionDevice(
+            user_id=user_id,
+            client_name=client_name,
+            user_agent=user_agent,
+            ip_address=ip_address,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
+    await session.commit()
+    return True
 
 
 async def backfill_subscription_urls(session: AsyncSession) -> int:
