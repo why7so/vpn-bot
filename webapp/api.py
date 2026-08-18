@@ -670,6 +670,40 @@ def _client_ip(request: web.Request) -> str | None:
     return request.remote
 
 
+def _device_key_and_label(request: web.Request, client_name: str) -> tuple[str, str]:
+    """Happ (и совместимые клиенты — см. happ.su/main/dev-docs/app-management)
+    по умолчанию шлют с каждым запросом подписки:
+      X-Hwid        — уникальный ID устройства
+      X-Device-Model — модель устройства (напр. "iPhone 14 Pro" либо
+                       иногда внутренний код модели типа "ELP-NX1" —
+                       зависит от того, что вернула ОС самому приложению)
+      X-Device-Os / X-Ver-Os — ОС и её версия (напр. "iOS" / "17.0")
+
+    Возвращает (device_key, device_label):
+      device_key   — X-Hwid, если есть (различает физические устройства
+                     даже с одинаковым приложением), иначе client_name
+                     (грубее — не различает два устройства с одним и тем
+                     же приложением, если оно не шлёт X-Hwid).
+      device_label — красивая строка для уведомления, напр.
+                     "iPhone 14 Pro, iOS 17.0". Если ни модели, ни ОС
+                     клиент не прислал — просто client_name (напр. "Happ").
+    """
+    hwid = (request.headers.get("X-Hwid") or "").strip()
+    model = (request.headers.get("X-Device-Model") or "").strip()
+    os_name = (request.headers.get("X-Device-Os") or "").strip()
+    os_ver = (request.headers.get("X-Ver-Os") or "").strip()
+
+    label_parts = []
+    if model:
+        label_parts.append(model)
+    if os_name:
+        label_parts.append(f"{os_name} {os_ver}".strip())
+    device_label = ", ".join(label_parts) if label_parts else client_name
+
+    device_key = hwid or client_name
+    return device_key, device_label
+
+
 @routes.get("/sub/{token}")
 async def get_subscription_config(request: web.Request) -> web.Response:
     """Ссылка-подписка для VPN-клиента (Happ/INCY/v2rayNG и т.п.) —
@@ -710,8 +744,11 @@ async def get_subscription_config(request: web.Request) -> web.Response:
 
         user_agent = request.headers.get("User-Agent")
         client_name = _parse_client_name(user_agent)
+        device_key, device_label = _device_key_and_label(request, client_name)
         ip_address = _client_ip(request)
-        is_new_device = await register_subscription_device(session, user.id, client_name, user_agent, ip_address)
+        is_new_device = await register_subscription_device(
+            session, user.id, client_name, device_key, device_label, user_agent, ip_address
+        )
 
     if is_new_device:
         bot = request.app.get("bot")
@@ -720,7 +757,7 @@ async def get_subscription_config(request: web.Request) -> web.Response:
             text = (
                 "🔌 Новое подключение\n"
                 f"👤 User: {user.tg_id}\n"
-                f"📱 Device: {client_name}\n"
+                f"📱 Device: {device_label}\n"
                 f"🌐 IP: {ip_address or '—'}\n"
                 f"🕒 {now_str}"
             )

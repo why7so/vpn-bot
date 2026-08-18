@@ -48,6 +48,7 @@ async def init_db() -> None:
         await _ensure_sub_token_column(conn)
         await _ensure_invoice_balance_credit_column(conn)
         await _ensure_user_first_name_column(conn)
+        await _ensure_subscription_device_columns(conn)
 
 
 async def _reset_tables_if_schema_mismatch(conn) -> None:
@@ -175,6 +176,44 @@ async def _ensure_user_first_name_column(conn) -> None:
         users_columns = _table_columns(sync_conn, "users")
         if "first_name" not in users_columns:
             sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN first_name VARCHAR")
+
+    await conn.run_sync(_add_missing_columns)
+
+
+async def _ensure_subscription_device_columns(conn) -> None:
+    """Сам-миграция: subscription_devices.device_key/device_label появились
+    для дедупликации по X-Hwid и человекочитаемого "Модель, ОС" в
+    уведомлении — добавляем колонки в уже существующие БД, если их ещё нет.
+
+    Заодно снимаем старое UNIQUE(user_id, client_name) — оно было верным,
+    пока дедупликация шла по имени приложения, но теперь дедуплицируем по
+    device_key (X-Hwid), и у одного user_id + client_name (например, два
+    телефона с Happ) законно может быть несколько строк. Дедуп теперь
+    целиком на уровне приложения (register_subscription_device делает
+    SELECT перед INSERT), поэтому constraint просто снимаем, а не заменяем
+    другим — тип БД (Postgres/SQLite) синтаксис ALTER для констрейнтов не
+    унифицирует, поэтому просто игнорируем ошибку, если снять не удалось
+    (напр. SQLite, где сама констрейнта могла и не завестись похожим образом)."""
+
+    def _add_missing_columns(sync_conn):
+        columns = _table_columns(sync_conn, "subscription_devices")
+        if "device_key" not in columns:
+            sync_conn.exec_driver_sql("ALTER TABLE subscription_devices ADD COLUMN device_key VARCHAR")
+        if "device_label" not in columns:
+            sync_conn.exec_driver_sql("ALTER TABLE subscription_devices ADD COLUMN device_label VARCHAR")
+        try:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE subscription_devices DROP CONSTRAINT IF EXISTS uq_subscription_device"
+            )
+        except Exception:
+            pass  # SQLite и т.п. — не поддерживает синтаксис, дедуп и так на уровне приложения
+        # Уже существующие строки (созданные до device_key) — проставляем
+        # device_key = client_name как разумный фолбэк, иначе они не
+        # найдутся по новому ключу и первое же обращение снова сочтётся
+        # "новым устройством".
+        sync_conn.exec_driver_sql(
+            "UPDATE subscription_devices SET device_key = client_name WHERE device_key IS NULL"
+        )
 
     await conn.run_sync(_add_missing_columns)
 
@@ -565,24 +604,31 @@ async def register_subscription_device(
     session: AsyncSession,
     user_id: uuid.UUID,
     client_name: str,
+    device_key: str,
+    device_label: str,
     user_agent: str | None,
     ip_address: str | None,
 ) -> bool:
     """Регистрирует обращение VPN-клиента к /sub/<token>. Возвращает True,
-    только если это ПЕРВОЕ обращение такого client_name для этого
+    только если это ПЕРВОЕ обращение такого device_key для этого
     пользователя (стоит уведомить о новом устройстве) — при повторных
-    обращениях того же клиента просто обновляет last_seen_at/ip_address
-    и возвращает False, чтобы периодические автообновления подписки не
-    спамили уведомлениями."""
+    обращениях того же устройства просто обновляет last_seen_at/ip_address/
+    device_label и возвращает False, чтобы периодические автообновления
+    подписки не спамили уведомлениями.
+
+    device_key — X-Hwid (уникальный ID устройства у Happ и совместимых
+    клиентов), если клиент его не шлёт — фолбэк на client_name (грубее:
+    не различает два устройства с одним и тем же приложением)."""
     result = await session.execute(
         select(SubscriptionDevice).where(
-            SubscriptionDevice.user_id == user_id, SubscriptionDevice.client_name == client_name
+            SubscriptionDevice.user_id == user_id, SubscriptionDevice.device_key == device_key
         )
     )
     device = result.scalar_one_or_none()
     now = dt.datetime.utcnow()
     if device is not None:
         device.last_seen_at = now
+        device.device_label = device_label
         if ip_address:
             device.ip_address = ip_address
         await session.commit()
@@ -592,6 +638,8 @@ async def register_subscription_device(
         SubscriptionDevice(
             user_id=user_id,
             client_name=client_name,
+            device_key=device_key,
+            device_label=device_label,
             user_agent=user_agent,
             ip_address=ip_address,
             first_seen_at=now,
