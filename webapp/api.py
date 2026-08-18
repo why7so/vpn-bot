@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import logging
+import secrets
 
 from aiohttp import web
 
@@ -37,6 +38,8 @@ from database.db import (
     get_plans as list_plans,
     get_subscription,
     get_user_by_sub_token,
+    get_user_by_tg_id,
+    get_user_by_vpn_client_uuid,
     register_subscription_device,
     mark_invoice_paid,
     revoke_browser_session,
@@ -684,6 +687,17 @@ async def get_subscription_config(request: web.Request) -> web.Response:
     шлём пользователю уведомление в бота с информацией об устройстве —
     повторные периодические автообновления подписки уже известным клиентом
     уведомление не повторяют.
+
+    support-url — иконка Telegram-поддержки в приложении (см.
+    https://www.happ.su/main/dev-docs/app-management#link-to-the-support-page),
+    стандартный параметр, не требует ничего доп.
+
+    sub-info-text/providerid — "карточка" с тарифом и днями подписки в
+    приложении (см. скриншот из тикета) — это "Advanced announcements" Happ,
+    для которых нужен Provider ID: отдельная регистрация на
+    https://happ-proxy.com (сторонний сервис Happ, не часть этого проекта).
+    Пока config.happ_provider_id не задан — эти заголовки просто не
+    отправляются, остальное продолжает работать как раньше.
     """
     token = request.match_info["token"]
 
@@ -692,6 +706,7 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         if user is None:
             raise web.HTTPNotFound(text="subscription not found")
         sub = await get_subscription(session, user.id)
+        plan = await get_plan(session, sub.plan_code) if sub and sub.plan_code else None
 
         user_agent = request.headers.get("User-Agent")
         client_name = _parse_client_name(user_agent)
@@ -714,7 +729,8 @@ async def get_subscription_config(request: web.Request) -> web.Response:
             except Exception:
                 logger.exception("Failed to notify tg_id=%s about new subscription device", user.tg_id)
 
-    expire_at = sub.expires_at if sub else dt.datetime.utcnow()
+    now = dt.datetime.utcnow()
+    expire_at = sub.expires_at if sub else now
     expire_ts = int(expire_at.replace(tzinfo=dt.timezone.utc).timestamp())
 
     body = "\n".join(config.subscription_node_links)
@@ -725,9 +741,119 @@ async def get_subscription_config(request: web.Request) -> web.Response:
         "profile-title": config.vpn_name,
         "subscription-userinfo": f"upload=0; download=0; total=0; expire={expire_ts}",
         "content-disposition": f'attachment; filename="{filename}"',
-        "profile-update-interval": "6",
+        "profile-update-interval": "1",
     }
+
+    if config.support_username:
+        headers["support-url"] = f"https://t.me/{config.support_username.lstrip('@')}"
+    if config.webapp_url:
+        headers["profile-web-page-url"] = config.webapp_url
+
+    if config.happ_provider_id:
+        headers["providerid"] = config.happ_provider_id
+        days_left = max(0, (expire_at - now).days) if sub else 0
+        info_lines = []
+        if plan:
+            info_lines.append(f"Тариф: {plan['title']}")
+        info_lines.append(f"Осталось {days_left} дн. подписки" if sub else "Подписка не активна")
+        if config.support_username:
+            info_lines.append(f"Telegram — @{config.support_username.lstrip('@')}")
+        # HTTP-заголовки не допускают перевод строки внутри значения —
+        # многострочный текст передаём как base64 (тот же паттерн, что
+        # у profile-title/announce в документации Happ).
+        info_text = "\n".join(info_lines)
+        headers["sub-info-text"] = "base64:" + base64.b64encode(info_text.encode("utf-8")).decode("ascii")
+        headers["sub-expire"] = "1"
+
     return web.Response(text=body_b64, headers=headers, content_type="text/plain")
+
+
+@routes.post("/webhook/device-connected")
+async def device_connected_webhook(request: web.Request) -> web.Response:
+    """Вебхук от мастер-сервера: реальное подключение устройства к VPN.
+
+    ЗАГЛУШКА-ИНФРАСТРУКТУРА: мастер-сервер с телеметрией подключений ещё не
+    построен (см. services/vpn_provider.py), поэтому этот эндпоинт пока
+    никто не вызывает. Он существует, чтобы контракт был готов заранее —
+    когда мастер-сервер появится, ему останется просто POST-ить сюда при
+    каждом новом подключении клиента, и пользователь тут же получит
+    уведомление в бота.
+
+    Авторизация: заголовок X-Webhook-Secret должен совпадать с
+    MASTER_WEBHOOK_SECRET из .env. Если секрет не настроен — эндпоинт
+    отключён (503), чтобы по умолчанию не быть открытым всем.
+
+    Тело запроса (JSON), все поля опциональны кроме идентификатора юзера:
+    {
+        "tg_id": 123456789,          // либо tg_id, либо client_uuid — один из двух
+        "client_uuid": "...",        // uuid клиента у VPN-провайдера (см. set_vpn_client_uuid)
+        "device_name": "iPhone 15 Pro",
+        "os": "iOS 18.1",
+        "ip": "203.0.113.42",
+        "node": "nl-01",             // название/локация VPN-ноды, к которой подключились
+        "connected_at": "2026-08-17T12:00:00Z"   // ISO 8601, по умолчанию — сейчас
+    }
+    """
+    if not config.master_webhook_secret:
+        raise web.HTTPServiceUnavailable(text="MASTER_WEBHOOK_SECRET is not configured")
+
+    provided_secret = request.headers.get("X-Webhook-Secret", "")
+    if not secrets.compare_digest(provided_secret, config.master_webhook_secret):
+        raise web.HTTPUnauthorized(text="invalid webhook secret")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise ApiError("Invalid JSON body")
+
+    tg_id = body.get("tg_id")
+    client_uuid = body.get("client_uuid")
+    if not tg_id and not client_uuid:
+        raise ApiError("Either tg_id or client_uuid is required")
+
+    async with async_session() as session:
+        if tg_id:
+            user = await get_user_by_tg_id(session, int(tg_id))
+        else:
+            user = await get_user_by_vpn_client_uuid(session, str(client_uuid))
+
+    if user is None:
+        raise web.HTTPNotFound(text="user not found")
+
+    bot = request.app.get("bot")
+    if bot is None:
+        # API запущен без бота (например, отдельный процесс) — уведомить некому.
+        logger.warning("device-connected webhook received but no bot instance is attached to the app")
+        return web.json_response({"status": "ok", "notified": False})
+
+    device_name = (body.get("device_name") or "").strip()
+    os_name = (body.get("os") or "").strip()
+    ip = (body.get("ip") or "").strip()
+    node = (body.get("node") or "").strip()
+    connected_at_raw = body.get("connected_at")
+    try:
+        connected_at = dt.datetime.fromisoformat(connected_at_raw.replace("Z", "+00:00")) if connected_at_raw else dt.datetime.utcnow()
+    except ValueError:
+        connected_at = dt.datetime.utcnow()
+
+    lines = ["🔌 <b>Новое устройство подключилось к VPN</b>", ""]
+    lines.append(f"📱 Устройство: {device_name}" if device_name else "📱 Устройство: неизвестно")
+    if os_name:
+        lines.append(f"💻 ОС: {os_name}")
+    if ip:
+        lines.append(f"🌐 IP: <code>{ip}</code>")
+    if node:
+        lines.append(f"📍 Сервер: {node}")
+    lines.append(f"🕐 Время: {connected_at.strftime('%d.%m.%Y, %H:%M UTC')}")
+
+    try:
+        await bot.send_message(chat_id=user.tg_id, text="\n".join(lines))
+        notified = True
+    except Exception:
+        logger.exception("Failed to send device-connected notification to tg_id=%s", user.tg_id)
+        notified = False
+
+    return web.json_response({"status": "ok", "notified": notified})
 
 
 @web.middleware

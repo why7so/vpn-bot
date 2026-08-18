@@ -354,6 +354,14 @@ async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def get_user_by_vpn_client_uuid(session: AsyncSession, client_uuid: str) -> User | None:
+    """Для вебхука мастер-сервера о подключении устройства (см.
+    webapp/api.py: POST /webhook/device-connected) — если мастер-сервер знает
+    только свой internal client_uuid (см. set_vpn_client_uuid), а не tg_id."""
+    result = await session.execute(select(User).where(User.vpn_client_uuid == client_uuid))
+    return result.scalar_one_or_none()
+
+
 async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
