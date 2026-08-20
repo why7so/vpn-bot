@@ -23,7 +23,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="Подключить устройство",
-                    web_app=WebAppInfo(url=f"{base}#connect-device"),
+                    web_app=WebAppInfo(url=f"{base}?page=connect-device"),
                     style="success",
                     icon_custom_emoji_id=config.icon_emoji_connect_device,
                 )
